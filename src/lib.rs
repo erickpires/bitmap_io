@@ -354,12 +354,18 @@ fn interpret_image_data(data: &[u8],
         while data_walker.has_data() {
             let pixel_value = data_walker.next_u32();
 
-            let pixel = BitmapPixel {
+            let mut pixel = BitmapPixel {
                 blue  : ((pixel_value & blue_mask)  >> blue_bit_offset) as u8,
                 green : ((pixel_value & green_mask) >> green_bit_offset) as u8,
                 red   : ((pixel_value & red_mask)   >> red_bit_offset) as u8,
                 alpha : ((pixel_value & alpha_mask) >> alpha_bit_offset) as u8,
             };
+
+            if alpha_mask == 0x00 {
+                // NOTE(erick): We are in XRGB mode.
+                pixel.alpha = 0xff;
+            }
+
             result.push(pixel);
         }
     } else if bits_per_pixel == 24 {
