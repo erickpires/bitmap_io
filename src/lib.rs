@@ -144,9 +144,10 @@ impl BitmapInfoHeader {
             colors_used        : 0,
             colors_important   : 0,
 
-            red_mask   : 0x0000ff00,
+            // NOTE(erick): Copying gimp here.
+            red_mask   : 0xff000000,
             green_mask : 0x00ff0000,
-            blue_mask  : 0xff000000,
+            blue_mask  : 0x0000ff00,
             alpha_mask : 0x000000ff,
 
         }
@@ -199,9 +200,21 @@ impl Display for BitmapPixel {
     }
 }
 
+fn bit_offset(mask: u32) -> u8 {
+    match mask {
+        0xff000000 => 24,
+        0x00ff0000 => 16,
+        0x0000ff00 => 8,
+        0x000000ff => 0,
+        _          => 0,
+    }
+}
+
 fn interpret_image_data(data: &[u8],
-                        bits_per_pixel: u16,
-                        compression_type: u32) -> Vec<BitmapPixel> {
+                        info_header: &BitmapInfoHeader) -> Vec<BitmapPixel> {
+    let bits_per_pixel   = info_header.bits_per_pixel;
+    let compression_type = info_header.compression_type;
+
     let mut data_walker = BytesWalker::new(data);
     //NOTE(erick): This is only true while we don't handle compression
     let mut result = Vec::with_capacity(data.len());
@@ -210,6 +223,27 @@ fn interpret_image_data(data: &[u8],
     if compression_type == CompressionType::BitFields as u32 {
         assert_eq!(32, bits_per_pixel); // NOTE: This must be true
 
+        let red_mask   = info_header.red_mask;
+        let green_mask = info_header.green_mask;
+        let blue_mask  = info_header.blue_mask;
+        let alpha_mask = info_header.alpha_mask;
+
+        let red_bit_offset   = bit_offset(red_mask);
+        let green_bit_offset = bit_offset(green_mask);
+        let blue_bit_offset  = bit_offset(blue_mask);
+        let alpha_bit_offset = bit_offset(alpha_mask);
+
+        while data_walker.has_data() {
+            let pixel_value = data_walker.next_u32();
+
+            let pixel = BitmapPixel {
+                blue  : ((pixel_value & blue_mask)  >> blue_bit_offset) as u8,
+                green : ((pixel_value & green_mask) >> green_bit_offset) as u8,
+                red   : ((pixel_value & red_mask)   >> red_bit_offset) as u8,
+                alpha : ((pixel_value & alpha_mask) >> alpha_bit_offset) as u8,
+            };
+            result.push(pixel);
+        }
     } else if bits_per_pixel == 24 {
         while data_walker.has_data() {
             let pixel = BitmapPixel {
@@ -263,10 +297,13 @@ impl Bitmap {
 
         // NOTE(erick): We only support the basic header so far.
         let info_header = BitmapInfoHeader::from_data(&data_slice[14..]);
+        println!("{}", f_header);
         println!("{}", info_header);
-        assert_eq!(40, info_header.info_header_size);
+        assert!(info_header.info_header_size == 40 ||
+                info_header.info_header_size == 56);
+        assert!(info_header.compression_type == CompressionType::Uncompressed as u32 ||
+                info_header.compression_type == CompressionType::BitFields as u32);
         assert_eq!(1, info_header.n_planes);
-        assert_eq!(CompressionType::Uncompressed as u32, info_header.compression_type);
 
         let mut image_size_in_bytes = info_header.image_size as usize;
 
@@ -283,8 +320,7 @@ impl Bitmap {
                               + image_size_in_bytes];
         // TODO(erick): Decompressed the image!!!!
         let image_data = interpret_image_data(image_data_slice,
-                                              info_header.bits_per_pixel,
-                                              info_header.compression_type);
+                                              &info_header);
 
         Bitmap {
             file_header : f_header,
