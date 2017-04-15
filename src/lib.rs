@@ -93,6 +93,11 @@ pub struct BitmapInfoHeader {
     pub pixels_per_meter_y : i32,
     pub colors_used        : u32,
     pub colors_important   : u32,
+
+    pub red_mask   : u32,
+    pub green_mask : u32,
+    pub blue_mask  : u32,
+    pub alpha_mask : u32,
 }
 
 #[allow(dead_code)]
@@ -101,17 +106,22 @@ impl Display for BitmapInfoHeader {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "BitmapFileheader: {{\n")?;
 
-        write!(f, "\t info_header_size: {}\n", self.info_header_size)?;
-        write!(f, "\t image_width: {}\n", self.image_width)?;
-        write!(f, "\t image_height: {}\n", self.image_height)?;
-        write!(f, "\t n_planes: {}\n", self.n_planes)?;
-        write!(f, "\t bits_per_pixel: {}\n", self.bits_per_pixel)?;
-        write!(f, "\t compression_type: {}\n", self.compression_type)?;
-        write!(f, "\t image_size: {}\n", self.image_size)?;
-        write!(f, "\t pixels_per_meter_x: {}\n", self.pixels_per_meter_x)?;
-        write!(f, "\t pixels_per_meter_y: {}\n", self.pixels_per_meter_y)?;
-        write!(f, "\t colors_used: {}\n", self.colors_used)?;
-        write!(f, "\t colors_important: {}\n", self.colors_important)?;
+        write!(f, "\t info_header_size: {}\n"   , self.info_header_size)?;
+        write!(f, "\t image_width: {}\n"        , self.image_width)?;
+        write!(f, "\t image_height: {}\n"       , self.image_height)?;
+        write!(f, "\t n_planes: {}\n"           , self.n_planes)?;
+        write!(f, "\t bits_per_pixel: {}\n"     , self.bits_per_pixel)?;
+        write!(f, "\t compression_type: {}\n"   , self.compression_type)?;
+        write!(f, "\t image_size: {}\n"         , self.image_size)?;
+        write!(f, "\t pixels_per_meter_x: {}\n" , self.pixels_per_meter_x)?;
+        write!(f, "\t pixels_per_meter_y: {}\n" , self.pixels_per_meter_y)?;
+        write!(f, "\t colors_used: {}\n"        , self.colors_used)?;
+        write!(f, "\t colors_important: {}\n"   , self.colors_important)?;
+
+        write!(f, "\t red_mask: 0x{:08x}\n"  , self.red_mask)?;
+        write!(f, "\t green_mask: 0x{:08x}\n", self.green_mask)?;
+        write!(f, "\t blue_mask: 0x{:08x}\n" , self.blue_mask)?;
+        write!(f, "\t alpha_mask: 0x{:08x}\n", self.alpha_mask)?;
 
         write!(f, "}}")
     }
@@ -133,13 +143,19 @@ impl BitmapInfoHeader {
             pixels_per_meter_y : 0,
             colors_used        : 0,
             colors_important   : 0,
+
+            red_mask   : 0x0000ff00,
+            green_mask : 0x00ff0000,
+            blue_mask  : 0xff000000,
+            alpha_mask : 0x000000ff,
+
         }
     }
 
     fn from_data(data: &[u8]) -> BitmapInfoHeader {
         let mut data_walker = BytesWalker::new(data);
 
-        BitmapInfoHeader {
+        let mut result = BitmapInfoHeader {
             info_header_size   : data_walker.next_u32(),
             image_width        : data_walker.next_i32(),
             image_height       : data_walker.next_i32(),
@@ -151,7 +167,22 @@ impl BitmapInfoHeader {
             pixels_per_meter_y : data_walker.next_i32(),
             colors_used        : data_walker.next_u32(),
             colors_important   : data_walker.next_u32(),
+
+            red_mask   : 0,
+            green_mask : 0,
+            blue_mask  : 0,
+            alpha_mask : 0,
+        };
+
+        if result.info_header_size > 40 {
+            // NOTE(erick): We have masks to read
+            result.red_mask   = data_walker.next_u32();
+            result.green_mask = data_walker.next_u32();
+            result.blue_mask  = data_walker.next_u32();
+            result.alpha_mask = data_walker.next_u32();
         }
+
+        result
     }
 }
 
@@ -162,11 +193,24 @@ pub struct BitmapPixel {
     pub alpha : u8,
 }
 
-fn interpret_image_data(data: &[u8], bits_per_pixel: u16) -> Vec<BitmapPixel> {
+impl Display for BitmapPixel {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "0x{:02x}{:02x}{:02x}{:02x}", self.red, self.green, self.blue, self.alpha)
+    }
+}
+
+fn interpret_image_data(data: &[u8],
+                        bits_per_pixel: u16,
+                        compression_type: u32) -> Vec<BitmapPixel> {
     let mut data_walker = BytesWalker::new(data);
     //NOTE(erick): This is only true while we don't handle compression
     let mut result = Vec::with_capacity(data.len());
-    if bits_per_pixel == 24 {
+
+
+    if compression_type == CompressionType::BitFields as u32 {
+        assert_eq!(32, bits_per_pixel); // NOTE: This must be true
+
+    } else if bits_per_pixel == 24 {
         while data_walker.has_data() {
             let pixel = BitmapPixel {
                 blue  : data_walker.next_u8(),
@@ -177,13 +221,18 @@ fn interpret_image_data(data: &[u8], bits_per_pixel: u16) -> Vec<BitmapPixel> {
             result.push(pixel);
         }
     } else if bits_per_pixel == 32 {
+        // NOTE(erick): We only have alpha when the
+        // compression_type is BitFields. The last byte is
+        // here only for padding.
         while data_walker.has_data() {
             let pixel = BitmapPixel {
                 blue  : data_walker.next_u8(),
                 green : data_walker.next_u8(),
                 red   : data_walker.next_u8(),
-                alpha : data_walker.next_u8(),
+                alpha : 0xff,
             };
+            // NOTE(erick): We have to discard the padding byte.
+            data_walker.next_u8();
             result.push(pixel);
         }
     } else {
@@ -213,7 +262,8 @@ impl Bitmap {
         assert!(f_header.validate());
 
         // NOTE(erick): We only support the basic header so far.
-        let info_header = BitmapInfoHeader::from_data(&data_slice[14..55]);
+        let info_header = BitmapInfoHeader::from_data(&data_slice[14..]);
+        println!("{}", info_header);
         assert_eq!(40, info_header.info_header_size);
         assert_eq!(1, info_header.n_planes);
         assert_eq!(CompressionType::Uncompressed as u32, info_header.compression_type);
@@ -233,7 +283,8 @@ impl Bitmap {
                               + image_size_in_bytes];
         // TODO(erick): Decompressed the image!!!!
         let image_data = interpret_image_data(image_data_slice,
-                                              info_header.bits_per_pixel);
+                                              info_header.bits_per_pixel,
+                                              info_header.compression_type);
 
         Bitmap {
             file_header : f_header,
