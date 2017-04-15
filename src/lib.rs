@@ -238,7 +238,37 @@ impl Display for BitmapPixel {
 
 #[allow(dead_code)]
 impl BitmapPixel {
-    fn black() -> BitmapPixel {
+    pub fn rgba(r: u8, g: u8, b: u8, a: u8) -> BitmapPixel {
+        BitmapPixel {
+            red   : r,
+            green : g,
+            blue  : b,
+            alpha : a,
+        }
+    }
+
+    pub fn rgb(r: u8, g: u8, b: u8) -> BitmapPixel {
+        BitmapPixel::rgba(r, g, b, 0xff)
+    }
+
+    pub fn rgba_u32(color: u32) -> BitmapPixel {
+        BitmapPixel::rgba((color >> 24) as u8,
+                          (color >> 16) as u8,
+                          (color >>  8) as u8,
+                          (color)       as u8)
+    }
+
+    pub fn rgb_u32(color: u32) -> BitmapPixel {
+        BitmapPixel::rgba_u32(color | 0xff)
+    }
+
+    pub fn same_color_as(&self, other: &BitmapPixel) -> bool {
+        self.red == other.red &&
+            self.green == other.green &&
+            self.blue == other.blue
+    }
+
+    pub fn black() -> BitmapPixel {
         BitmapPixel {
             red   : 0x00,
             green : 0x00,
@@ -246,7 +276,7 @@ impl BitmapPixel {
             alpha : 0xff,
         }
     }
-    fn white() -> BitmapPixel {
+    pub fn white() -> BitmapPixel {
         BitmapPixel {
             red   : 0xff,
             green : 0xff,
@@ -254,7 +284,7 @@ impl BitmapPixel {
             alpha : 0xff,
         }
     }
-    fn red() -> BitmapPixel {
+    pub fn red() -> BitmapPixel {
         BitmapPixel {
             red   : 0xff,
             green : 0x00,
@@ -262,7 +292,7 @@ impl BitmapPixel {
             alpha : 0xff,
         }
     }
-    fn green() -> BitmapPixel {
+    pub fn green() -> BitmapPixel {
         BitmapPixel {
             red   : 0x00,
             green : 0xff,
@@ -270,7 +300,7 @@ impl BitmapPixel {
             alpha : 0xff,
         }
     }
-    fn blue() -> BitmapPixel {
+    pub fn blue() -> BitmapPixel {
         BitmapPixel {
             red   : 0x00,
             green : 0x00,
@@ -278,7 +308,7 @@ impl BitmapPixel {
             alpha : 0xff,
         }
     }
-    fn transparent() -> BitmapPixel {
+    pub fn transparent() -> BitmapPixel {
         BitmapPixel {
             red   : 0xff,
             green : 0xff,
@@ -507,6 +537,14 @@ impl Bitmap {
 
         self.file_header = file_header;
         self.info_header = info_header;
+    }
+
+    pub fn color_to_alpha(&mut self, color: BitmapPixel) {
+        for pixel in &mut self.image_data {
+            if pixel.same_color_as(&color) {
+                pixel.alpha = 0x00;
+            }
+        }
     }
 }
 
