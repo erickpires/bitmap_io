@@ -1,0 +1,6 @@
+[package]
+name = "bitmap_io"
+version = "0.1.0"
+authors = ["Erick Pires <pires@erickpires.com>"]
+
+[dependencies]
