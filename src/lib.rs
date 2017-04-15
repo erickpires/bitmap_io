@@ -1,6 +1,7 @@
 use std::fmt::Display;
 use std::fmt::Formatter;
 
+use std::io::Write;
 use std::io::Read;
 use std::fs::File;
 
@@ -58,6 +59,14 @@ impl BitmapFileHeader {
             reserved2          : data_walker.next_u16(),
             pixel_array_offset : data_walker.next_u32(),
         }
+    }
+
+    fn into_data(&self, data: &mut Vec<u8>) {
+        push_u16(data, self.magic_number);
+        push_u32(data, self.file_size);
+        push_u16(data, self.reserved1);
+        push_u16(data, self.reserved2);
+        push_u32(data, self.pixel_array_offset);
     }
 }
 
@@ -188,6 +197,28 @@ impl BitmapInfoHeader {
         }
 
         result
+    }
+
+    fn into_data(&self, data: &mut Vec<u8>) {
+        push_u32(data, self.info_header_size);
+        push_i32(data, self.image_width);
+        push_i32(data, self.image_height);
+        push_u16(data, self.n_planes);
+        push_u16(data, self.bits_per_pixel);
+        push_u32(data, self.compression_type);
+        push_u32(data, self.image_size);
+        push_i32(data, self.pixels_per_meter_x);
+        push_i32(data, self.pixels_per_meter_y);
+        push_u32(data, self.colors_used);
+        push_u32(data, self.colors_important);
+
+        if self.info_header_size > 40 {
+            push_u32(data, self.red_mask);
+            push_u32(data, self.green_mask);
+            push_u32(data, self.blue_mask);
+            push_u32(data, self.alpha_mask);
+        }
+
     }
 }
 
@@ -333,17 +364,37 @@ fn interpret_image_data(data: &[u8],
     result
 }
 
+// TODO(erick): This function only supports 32-bit files with BitFields compression
+fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
+                    bitmap_info: &BitmapInfoHeader) {
+    let red_bit_offset   = bit_offset(bitmap_info.red_mask);
+    let green_bit_offset = bit_offset(bitmap_info.green_mask);
+    let blue_bit_offset  = bit_offset(bitmap_info.blue_mask);
+    let alpha_bit_offset = bit_offset(bitmap_info.alpha_mask);
+
+    for pixel in pixels {
+        let pixel_value : u32 = (pixel.red as u32)   << red_bit_offset   |
+                                (pixel.green as u32) << green_bit_offset |
+                                (pixel.blue  as u32) << blue_bit_offset  |
+                                (pixel.alpha as u32) << alpha_bit_offset;
+
+        push_u32(data, pixel_value);
+    }
+}
+
+
 pub  struct Bitmap {
     pub file_header : BitmapFileHeader,
     pub info_header : BitmapInfoHeader,
     pub image_data  : Vec<BitmapPixel>,
 }
 
+const FILE_HEADER_SIZE : u32 = 14;
+const INFO_HEADER_SIZE : u32 = 56;  // Basic header with color masks
+
 impl Bitmap {
 
     pub fn new(width: i32, height: i32) -> Bitmap {
-        const FILE_HEADER_SIZE : u32 = 14;
-        const INFO_HEADER_SIZE : u32 = 56;  // Basic header with color masks
 
         let n_pixels = (width * height) as u32;
         // NOTE(erick): Only true when using 32-bit pixels and no compression.
@@ -410,6 +461,53 @@ impl Bitmap {
             image_data  : image_data,
         }
     }
+
+    pub fn into_data(&self) -> Vec<u8> {
+        let mut result = Vec::new();
+
+        self.file_header.into_data(&mut result);
+        self.info_header.into_data(&mut result);
+
+        let data_size = result.len();
+
+        // Padding the data
+        for _ in data_size .. self.file_header.pixel_array_offset as usize {
+            result.push(0x00);
+        }
+
+        pixels_into_data(&self.image_data, &mut result, &self.info_header);
+
+        result
+    }
+
+    pub fn into_file(&self, file: &mut File) -> std::io::Result<()> {
+        let data = self.into_data();
+
+        file.write_all(data.as_slice())
+    }
+
+    pub fn convert_to_bitfield_compression(&mut self) {
+        let width  = self.info_header.image_width;
+        let height = self.info_header.image_height;
+
+        let n_pixels = (width * height) as u32;
+        let image_data_size = n_pixels * 4;
+
+        let p_offset = FILE_HEADER_SIZE + INFO_HEADER_SIZE;
+        let file_size = p_offset + image_data_size;
+
+        // NOTE(erick): It's easier to create new header than to
+        // try to modify the existing ones.
+        let file_header = BitmapFileHeader::new(file_size, p_offset);
+        let info_header = BitmapInfoHeader::new(INFO_HEADER_SIZE,
+                                               width, height,
+                                               image_data_size,
+                                               32, // TODO: Support other formats
+                                               CompressionType::BitFields);
+
+        self.file_header = file_header;
+        self.info_header = info_header;
+    }
 }
 
 struct BytesWalker<'a> {
@@ -462,4 +560,24 @@ impl<'a> BytesWalker<'a> {
 
         unsafe { transmute(bytes) }
     }
+}
+
+fn push_u32(v: &mut Vec<u8>, value: u32) {
+    // NOTE(erick): Little-endian.
+    v.push((value >>  0) as u8);
+    v.push((value >>  8) as u8);
+    v.push((value >> 16) as u8);
+    v.push((value >> 24) as u8);
+}
+fn push_i32(v: &mut Vec<u8>, value: i32) {
+    // NOTE(erick): Little-endian.
+    v.push((value >>  0) as u8);
+    v.push((value >>  8) as u8);
+    v.push((value >> 16) as u8);
+    v.push((value >> 24) as u8);
+}
+fn push_u16(v: &mut Vec<u8>, value: u16) {
+    // NOTE(erick): Little-endian.
+    v.push((value >>  0) as u8);
+    v.push((value >>  8) as u8);
 }
