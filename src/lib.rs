@@ -355,9 +355,9 @@ fn interpret_image_data(data: &[u8],
             let pixel_value = data_walker.next_u32();
 
             let mut pixel = BitmapPixel {
-                blue  : ((pixel_value & blue_mask)  >> blue_bit_offset) as u8,
+                blue  : ((pixel_value & blue_mask)  >> blue_bit_offset)  as u8,
                 green : ((pixel_value & green_mask) >> green_bit_offset) as u8,
-                red   : ((pixel_value & red_mask)   >> red_bit_offset) as u8,
+                red   : ((pixel_value & red_mask)   >> red_bit_offset)   as u8,
                 alpha : ((pixel_value & alpha_mask) >> alpha_bit_offset) as u8,
             };
 
@@ -369,7 +369,20 @@ fn interpret_image_data(data: &[u8],
             result.push(pixel);
         }
     } else if bits_per_pixel == 24 {
+        let mut column_index = 0;
         while data_walker.has_data() {
+            if column_index == info_header.image_width {
+                // NOTE(erick): We have to align rows to
+                // 4 bytes values.
+                column_index = 0;
+                data_walker.align_with_u32();
+
+                // NOTE(erick): The file can have some padding at the end.
+                if !data_walker.has_data() {
+                    break;
+                }
+            }
+
             let pixel = BitmapPixel {
                 blue  : data_walker.next_u8(),
                 green : data_walker.next_u8(),
@@ -377,6 +390,8 @@ fn interpret_image_data(data: &[u8],
                 alpha : 0xff,
             };
             result.push(pixel);
+
+            column_index += 1;
         }
     } else if bits_per_pixel == 32 {
         // NOTE(erick): We only have alpha when the
@@ -482,13 +497,23 @@ impl Bitmap {
             // FIXME(erick): If bits_per_pixel is 4 this value is set to zero.
             image_size_in_bytes = (info_header.bits_per_pixel / 8) as usize *
                 info_header.image_width as usize * info_header.image_height as usize;
+
+            if info_header.bits_per_pixel == 24 {
+                // NOTE(erick): We need to add the padding bytes.
+                let padding_per_row = (4 - (3 * info_header.image_width % 4)) % 4;
+                image_size_in_bytes += (info_header.image_height * padding_per_row) as usize;
+            }
         }
 
-        let image_data_slice  = &data_slice[f_header.pixel_array_offset as usize
-                              .. f_header.pixel_array_offset as usize
-                              + image_size_in_bytes];
+        println!("{}", f_header);
+        println!("{}", info_header);
+
+        let image_data_slice  = &data_slice[f_header.pixel_array_offset as usize ..
+                                            f_header.pixel_array_offset as usize +
+                                            image_size_in_bytes];
+
         // TODO(erick): Decompressed the image!!!!
-        let image_data = interpret_image_data(image_data_slice,
+        let image_data = interpret_image_data(&image_data_slice,
                                               &info_header);
 
         Bitmap {
@@ -603,6 +628,14 @@ impl<'a> BytesWalker<'a> {
         self.current_index += 4;
 
         unsafe { transmute(bytes) }
+    }
+
+    fn align_with_u32(&mut self) {
+        let rem = self.current_index % 4;
+
+        if rem != 0 {
+            self.current_index += 4 - rem;
+        }
     }
 }
 
