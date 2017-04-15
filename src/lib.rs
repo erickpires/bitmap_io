@@ -129,15 +129,17 @@ impl Display for BitmapInfoHeader {
 
 #[allow(dead_code)]
 impl BitmapInfoHeader {
-    fn new(h_size: u32, i_width: i32, i_height: i32, i_size: u32) -> BitmapInfoHeader {
+    fn new(h_size: u32, i_width: i32, i_height: i32, i_size: u32,
+           bits_per_pixel: u16,
+           compression: CompressionType) -> BitmapInfoHeader {
         // NOTE(erick): So far we only support 32-bit uncompressed images
         BitmapInfoHeader {
             info_header_size   : h_size,
             image_width        : i_width,
             image_height       : i_height,
             n_planes           : 1,
-            bits_per_pixel     : 32,
-            compression_type   : CompressionType::Uncompressed as u32,
+            bits_per_pixel     : bits_per_pixel,
+            compression_type   : compression as u32,
             image_size         : i_size,
             pixels_per_meter_x : 0,
             pixels_per_meter_y : 0,
@@ -156,6 +158,8 @@ impl BitmapInfoHeader {
     fn from_data(data: &[u8]) -> BitmapInfoHeader {
         let mut data_walker = BytesWalker::new(data);
 
+        // TODO(erick): 'image_height' can be negative to indicate
+        // top-down image. Handle this.
         let mut result = BitmapInfoHeader {
             info_header_size   : data_walker.next_u32(),
             image_width        : data_walker.next_i32(),
@@ -187,6 +191,7 @@ impl BitmapInfoHeader {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct BitmapPixel {
     pub blue  : u8,
     pub green : u8,
@@ -197,6 +202,58 @@ pub struct BitmapPixel {
 impl Display for BitmapPixel {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "0x{:02x}{:02x}{:02x}{:02x}", self.red, self.green, self.blue, self.alpha)
+    }
+}
+
+#[allow(dead_code)]
+impl BitmapPixel {
+    fn black() -> BitmapPixel {
+        BitmapPixel {
+            red   : 0x00,
+            green : 0x00,
+            blue  : 0x00,
+            alpha : 0xff,
+        }
+    }
+    fn white() -> BitmapPixel {
+        BitmapPixel {
+            red   : 0xff,
+            green : 0xff,
+            blue  : 0xff,
+            alpha : 0xff,
+        }
+    }
+    fn red() -> BitmapPixel {
+        BitmapPixel {
+            red   : 0xff,
+            green : 0x00,
+            blue  : 0x00,
+            alpha : 0xff,
+        }
+    }
+    fn green() -> BitmapPixel {
+        BitmapPixel {
+            red   : 0x00,
+            green : 0xff,
+            blue  : 0x00,
+            alpha : 0xff,
+        }
+    }
+    fn blue() -> BitmapPixel {
+        BitmapPixel {
+            red   : 0x00,
+            green : 0x00,
+            blue  : 0xff,
+            alpha : 0xff,
+        }
+    }
+    fn transparent() -> BitmapPixel {
+        BitmapPixel {
+            red   : 0xff,
+            green : 0xff,
+            blue  : 0xff,
+            alpha : 0x00,
+        }
     }
 }
 
@@ -283,6 +340,33 @@ pub  struct Bitmap {
 }
 
 impl Bitmap {
+
+    pub fn new(width: i32, height: i32) -> Bitmap {
+        const FILE_HEADER_SIZE : u32 = 14;
+        const INFO_HEADER_SIZE : u32 = 56;  // Basic header with color masks
+
+        let n_pixels = (width * height) as u32;
+        // NOTE(erick): Only true when using 32-bit pixels and no compression.
+        let image_data_size = n_pixels * 4;
+
+        let p_offset = FILE_HEADER_SIZE + INFO_HEADER_SIZE;
+        let file_size = p_offset + image_data_size;
+
+        let file_header = BitmapFileHeader::new(file_size, p_offset);
+        let info_header = BitmapInfoHeader::new(INFO_HEADER_SIZE,
+                                               width, height,
+                                               image_data_size,
+                                               32, // TODO: Support other formats
+                                               CompressionType::BitFields);
+        let i_data = vec![BitmapPixel::black(); n_pixels as usize];
+
+        Bitmap {
+            file_header : file_header,
+            info_header : info_header,
+            image_data  : i_data,
+        }
+    }
+
     // TODO(erick): Create a BitmapError and a bitmap_io::Result
     pub fn from_file(file: &mut File) -> std::io::Result<Bitmap> {
         let mut data = Vec::new();
@@ -297,8 +381,6 @@ impl Bitmap {
 
         // NOTE(erick): We only support the basic header so far.
         let info_header = BitmapInfoHeader::from_data(&data_slice[14..]);
-        println!("{}", f_header);
-        println!("{}", info_header);
         assert!(info_header.info_header_size == 40 ||
                 info_header.info_header_size == 56);
         assert!(info_header.compression_type == CompressionType::Uncompressed as u32 ||
