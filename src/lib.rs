@@ -462,8 +462,7 @@ const INFO_HEADER_SIZE : u32 = 56;  // Basic header with color masks
 
 impl Bitmap {
 
-    pub fn new(width: i32, height: i32) -> Bitmap {
-
+    pub fn lazy_new(width: i32, height: i32) -> Bitmap {
         let n_pixels = (width * height) as u32;
         // NOTE(erick): Only true when using 32-bit pixels and no compression.
         let image_data_size = n_pixels * 4;
@@ -477,13 +476,21 @@ impl Bitmap {
                                                image_data_size,
                                                32, // TODO: Support other formats
                                                CompressionType::BitFields);
-        let i_data = vec![BitmapPixel::black(); n_pixels as usize];
 
         Bitmap {
             file_header : file_header,
             info_header : info_header,
-            image_data  : i_data,
+            image_data  : Vec::new(),
         }
+    }
+
+    pub fn new(width: i32, height: i32) -> Bitmap {
+        let n_pixels = (width * height) as u32;
+
+        let mut result = Bitmap::lazy_new(width, height);
+        result.image_data = vec![BitmapPixel::black(); n_pixels as usize];
+
+        result
     }
 
     // TODO(erick): Create a BitmapError and a bitmap_io::Result
@@ -630,6 +637,38 @@ impl Bitmap {
             let row_slice = &mut data_slice[data_index .. data_index + stride];
             mirror_slice(row_slice);
         }
+    }
+
+    pub fn copy_rect_from(&mut self, other: &Bitmap,
+                          x0: u32, y0: u32, width: u32, height: u32) {
+        let stride = other.info_header.image_width as usize;
+
+        for row_index in y0 as usize .. (y0 + height) as usize {
+            for column_index in x0 as usize .. (x0 + width) as usize {
+                let data_index = row_index * stride + column_index;
+                let data = other.image_data[data_index];
+
+                self.image_data.push(data);
+            }
+        }
+    }
+
+    pub fn crop_to_rect(&self, x0: u32, y0: u32, width: u32, height: u32) -> Bitmap {
+        // TODO(erick): Fail successfully and return a Result
+        if width > self.info_header.image_width as u32 ||
+            height > self.info_header.image_height as u32 {
+                panic!("Cannot crop from a bigger region");
+            }
+
+        if x0 >= self.info_header.image_width as u32 ||
+            y0 >= self.info_header.image_height as u32 {
+                panic!("Point outside image");
+        }
+
+        let mut result = Bitmap::lazy_new(width as i32, height as i32);
+        result.copy_rect_from(self, x0, y0, width, height);
+
+        result
     }
 }
 
