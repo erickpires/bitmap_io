@@ -6,13 +6,13 @@ use std::fs::File;
 
 fn main() {
 
-    if let Ok(mut bmp_file) = File::open("test.bmp") {
+    if let Ok(mut bmp_file) = File::open("test2.bmp") {
         let mut bitmap = Bitmap::from_file(&mut bmp_file).unwrap();
 
         println!("{}", bitmap.file_header);
         println!("{}", bitmap.info_header);
 
-
+        // println!("Image has: {} pixels", bitmap.image_data.len());
         // let mut i = 0;
         // for _ in 0 .. bitmap.info_header.image_height {
         //     for _ in 0 .. bitmap.info_header.image_width {
@@ -24,8 +24,12 @@ fn main() {
         // }
 
         bitmap.convert_to_bitfield_compression();
+        bitmap.color_to_alpha(BitmapPixel::rgb(255, 0, 255));
+        bitmap.mirror_vertically();
+        bitmap.mirror_horizontally();
+        // bitmap.crop_to_rect()
 
-        if let Ok(mut out_file) = File::create("blah.bmp") {
+        if let Ok(mut out_file) = File::create("blah_test.bmp") {
             bitmap.into_file(&mut out_file);
         }
 
