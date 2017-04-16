@@ -5,6 +5,8 @@ use std::io::Write;
 use std::io::Read;
 use std::fs::File;
 
+use std::ops::Range;
+
 use std::intrinsics::transmute;
 
 const BMP_MAGIC_NUMBER : u16 = 0x4d_42; // "MB": We are little-endian
@@ -107,6 +109,10 @@ pub struct BitmapInfoHeader {
     pub green_mask : u32,
     pub blue_mask  : u32,
     pub alpha_mask : u32,
+
+    // NOTE(erick): Variables that are not in the
+    // actual Header
+    pub is_top_down : bool,
 }
 
 #[allow(dead_code)]
@@ -161,6 +167,8 @@ impl BitmapInfoHeader {
             blue_mask  : 0x0000ff00,
             alpha_mask : 0x000000ff,
 
+            is_top_down : false,
+
         }
     }
 
@@ -186,7 +194,14 @@ impl BitmapInfoHeader {
             green_mask : 0,
             blue_mask  : 0,
             alpha_mask : 0,
+
+            is_top_down : false,
         };
+
+        if result.image_height < 0 {
+            result.is_top_down = true;
+            result.image_height *= -1;
+        }
 
         if result.info_header_size > 40 {
             // NOTE(erick): We have masks to read
@@ -235,6 +250,8 @@ impl Display for BitmapPixel {
         write!(f, "0x{:02x}{:02x}{:02x}{:02x}", self.red, self.green, self.blue, self.alpha)
     }
 }
+
+impl Copy for BitmapPixel {}
 
 #[allow(dead_code)]
 impl BitmapPixel {
@@ -557,6 +574,10 @@ impl Bitmap {
         let p_offset = FILE_HEADER_SIZE + INFO_HEADER_SIZE;
         let file_size = p_offset + image_data_size;
 
+        if self.info_header.is_top_down {
+            self.mirror_vertically();
+        }
+
         // NOTE(erick): It's easier to create new header than to
         // try to modify the existing ones.
         let file_header = BitmapFileHeader::new(file_size, p_offset);
@@ -576,6 +597,69 @@ impl Bitmap {
                 pixel.alpha = 0x00;
             }
         }
+    }
+
+    // NOTE(erick): We can probably have a lazy version of this function
+    // if we use the 'is_to_down' flag every time we read from the the
+    // image_data.
+    pub fn mirror_vertically(&mut self) {
+        let data_slice = self.image_data.as_mut_slice();
+        let stride = self.info_header.image_width as usize;
+
+        for row_index in 0 .. (self.info_header.image_height / 2) as usize {
+            let mirrored_row_index = self.info_header.image_height as usize
+                - row_index  - 1;
+
+            let top_data_index = row_index * stride ;
+            let bottom_data_index = mirrored_row_index * stride;
+
+            let top_region    = top_data_index .. top_data_index + stride;
+            let bottom_region = bottom_data_index .. bottom_data_index + stride;
+
+            swap_slice_regions(data_slice, top_region, bottom_region);
+        }
+    }
+
+    pub fn mirror_horizontally(&mut self) {
+        let data_slice = self.image_data.as_mut_slice();
+        let stride = self.info_header.image_width as usize;
+
+        for row_index in 0 .. (self.info_header.image_height) as usize {
+            let data_index = row_index * stride;
+
+            let row_slice = &mut data_slice[data_index .. data_index + stride];
+            mirror_slice(row_slice);
+        }
+    }
+}
+
+fn swap_slice_regions<T>(slice: &mut [T],
+                         mut r0: Range<usize>,
+                         mut r1: Range<usize>) where T: Copy {
+    loop {
+        let i0 = r0.next();
+        let i1 = r1.next();
+
+        if i0.is_none() || i1.is_none() {
+            break;
+        }
+
+        let i0 = i0.unwrap();
+        let i1 = i1.unwrap();
+
+        let tmp = slice[i0];
+        slice[i0] = slice[i1];
+        slice[i1] = tmp;
+    }
+}
+
+fn mirror_slice<T>(slice: &mut [T]) where T: Copy {
+    for index_left in 0 .. slice.len() / 2 {
+        let index_right = slice.len() - index_left - 1;
+
+        let tmp = slice[index_left];
+        slice[index_left] = slice[index_right];
+        slice[index_right] = tmp;
     }
 }
 
