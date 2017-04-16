@@ -25,19 +25,30 @@ fn main() {
 
         bitmap.convert_to_bitfield_compression();
         bitmap.color_to_alpha(BitmapPixel::rgb(255, 0, 255));
-        bitmap.mirror_vertically();
+        // bitmap.mirror_vertically();
         bitmap.mirror_horizontally();
-        // bitmap.crop_to_rect()
+
+        let mut cropped = bitmap.crop_to_rect(2 * 128, 0, 128, 82);
+        cropped.mirror_vertically();
+
+        let merged = Bitmap::merge_horizontally(&bitmap, &cropped);
+        let merged2 = Bitmap::merge_vertically(&merged, &bitmap);
+
+        if let Ok(mut out_file) = File::create("crop_test.bmp") {
+            cropped.into_file(&mut out_file);
+        }
+
+        if let Ok(mut out_file) = File::create("merged_test.bmp") {
+            merged.into_file(&mut out_file);
+        }
+
+        if let Ok(mut out_file) = File::create("merged_test2.bmp") {
+            merged2.into_file(&mut out_file);
+        }
 
         if let Ok(mut out_file) = File::create("blah_test.bmp") {
             bitmap.into_file(&mut out_file);
         }
-
-        if let Ok(mut out_file) = File::create("black.bmp") {
-            let bitmap = Bitmap::new(150, 10);
-            bitmap.into_file(&mut out_file);
-        }
-
     }
 
     println!("Hello world");
