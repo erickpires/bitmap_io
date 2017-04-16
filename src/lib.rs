@@ -5,7 +5,9 @@ use std::io::Write;
 use std::io::Read;
 use std::fs::File;
 
+use std::cmp::max;
 use std::ops::Range;
+
 
 use std::intrinsics::transmute;
 
@@ -488,7 +490,7 @@ impl Bitmap {
         let n_pixels = (width * height) as u32;
 
         let mut result = Bitmap::lazy_new(width, height);
-        result.image_data = vec![BitmapPixel::black(); n_pixels as usize];
+        result.image_data = vec![BitmapPixel::transparent(); n_pixels as usize];
 
         result
     }
@@ -639,20 +641,6 @@ impl Bitmap {
         }
     }
 
-    pub fn copy_rect_from(&mut self, other: &Bitmap,
-                          x0: u32, y0: u32, width: u32, height: u32) {
-        let stride = other.info_header.image_width as usize;
-
-        for row_index in y0 as usize .. (y0 + height) as usize {
-            for column_index in x0 as usize .. (x0 + width) as usize {
-                let data_index = row_index * stride + column_index;
-                let data = other.image_data[data_index];
-
-                self.image_data.push(data);
-            }
-        }
-    }
-
     pub fn crop_to_rect(&self, x0: u32, y0: u32, width: u32, height: u32) -> Bitmap {
         // TODO(erick): Fail successfully and return a Result
         if width > self.info_header.image_width as u32 ||
@@ -669,6 +657,94 @@ impl Bitmap {
         result.copy_rect_from(self, x0, y0, width, height);
 
         result
+    }
+
+    pub fn merge_horizontally(image0: &Bitmap, image1: &Bitmap) -> Bitmap {
+        let result_width = image0.info_header.image_width +
+            image1.info_header.image_width;
+        let result_height = max(image0.info_header.image_height,
+                                image1.info_header.image_height);
+
+        let mut result = Bitmap::new(result_width, result_height);
+        result.replace_rect_with_rect_from(image0,
+                                           0, 0,
+                                           0, 0,
+                                           image0.info_header.image_width as u32,
+                                           image0.info_header.image_height as u32);
+        result.replace_rect_with_rect_from(image1,
+                                           0, 0,
+                                           image0.info_header.image_width as u32, 0,
+                                           image1.info_header.image_width as u32,
+                                           image1.info_header.image_height as u32);
+
+        result
+    }
+
+    pub fn merge_vertically(image0: &Bitmap, image1: &Bitmap) -> Bitmap {
+        let result_height = image0.info_header.image_height +
+            image1.info_header.image_height;
+        let result_width = max(image0.info_header.image_width,
+                               image1.info_header.image_width);
+
+        let mut result = Bitmap::new(result_width, result_height);
+        result.replace_rect_with_rect_from(image0,
+                                           0, 0,
+                                           0, 0,
+                                           image0.info_header.image_width as u32,
+                                           image0.info_header.image_height as u32);
+        result.replace_rect_with_rect_from(image1,
+                                           0, 0,
+                                           0, image0.info_header.image_height as u32,
+                                           image1.info_header.image_width as u32,
+                                           image1.info_header.image_height as u32);
+
+        result
+    }
+
+    //
+    // Private stuff.
+    //
+
+    fn replace_rect_with_rect_from(&mut self, other: &Bitmap,
+                                   src_x0 : u32, src_y0 : u32,
+                                   dest_x0: u32, dest_y0: u32,
+                                   width: u32, height: u32) {
+
+        let src_stride  = other.info_header.image_width as usize;
+        let dest_stride = self.info_header.image_width  as usize;
+
+        let mut current_dest_y = dest_y0 as usize;
+        for current_src_y in src_y0 as usize .. (src_y0 + height) as usize {
+            let mut current_dest_x = dest_x0 as usize;
+
+            for current_src_x in src_x0 as usize .. (src_x0 + width) as usize {
+                let src_data_index  = current_src_y * src_stride + current_src_x;
+                let dest_data_index = current_dest_y * dest_stride + current_dest_x;
+
+                let data = other.image_data[src_data_index];
+                self.image_data[dest_data_index] = data;
+
+                current_dest_x += 1;
+            }
+
+            current_dest_y += 1;
+        }
+    }
+
+    fn copy_rect_from(&mut self, other: &Bitmap,
+                      x0: u32, y0: u32, width: u32, height: u32) {
+        assert_eq!(0, self.image_data.len());
+
+        let stride = other.info_header.image_width as usize;
+
+        for row_index in y0 as usize .. (y0 + height) as usize {
+            for column_index in x0 as usize .. (x0 + width) as usize {
+                let data_index = row_index * stride + column_index;
+                let data = other.image_data[data_index];
+
+                self.image_data.push(data);
+            }
+        }
     }
 }
 
