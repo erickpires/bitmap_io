@@ -13,6 +13,9 @@ use std::intrinsics::transmute;
 
 const BMP_MAGIC_NUMBER : u16 = 0x4d_42; // "MB": We are little-endian
 
+const FILE_HEADER_SIZE : u32 = 14;
+const INFO_HEADER_SIZE : u32 = 56;  // Basic header with color masks
+
 #[derive(Debug)]
 pub struct BitmapFileHeader {
     pub magic_number       : u16,
@@ -118,7 +121,6 @@ pub struct BitmapInfoHeader {
 }
 
 #[allow(dead_code)]
-// All hail multiple-cursors-mode
 impl Display for BitmapInfoHeader {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "BitmapFileheader: {{\n")?;
@@ -149,7 +151,6 @@ impl BitmapInfoHeader {
     fn new(h_size: u32, i_width: i32, i_height: i32, i_size: u32,
            bits_per_pixel: u16,
            compression: CompressionType) -> BitmapInfoHeader {
-        // NOTE(erick): So far we only support 32-bit uncompressed images
         BitmapInfoHeader {
             info_header_size   : h_size,
             image_width        : i_width,
@@ -177,8 +178,6 @@ impl BitmapInfoHeader {
     fn from_data(data: &[u8]) -> BitmapInfoHeader {
         let mut data_walker = BytesWalker::new(data);
 
-        // TODO(erick): 'image_height' can be negative to indicate
-        // top-down image. Handle this.
         let mut result = BitmapInfoHeader {
             info_header_size   : data_walker.next_u32(),
             image_width        : data_walker.next_i32(),
@@ -249,7 +248,8 @@ pub struct BitmapPixel {
 
 impl Display for BitmapPixel {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "0x{:02x}{:02x}{:02x}{:02x}", self.red, self.green, self.blue, self.alpha)
+        write!(f, "0x{:02x}{:02x}{:02x}{:02x}",
+               self.red, self.green, self.blue, self.alpha)
     }
 }
 
@@ -459,9 +459,6 @@ pub  struct Bitmap {
     pub image_data  : Vec<BitmapPixel>,
 }
 
-const FILE_HEADER_SIZE : u32 = 14;
-const INFO_HEADER_SIZE : u32 = 56;  // Basic header with color masks
-
 impl Bitmap {
 
     pub fn lazy_new(width: i32, height: i32) -> Bitmap {
@@ -504,11 +501,13 @@ impl Bitmap {
 
     pub fn from_data(data: Vec<u8>) -> Bitmap {
         let data_slice = data.as_slice();
-        let f_header = BitmapFileHeader::from_data(&data_slice[0..14]);
+        let f_header =
+            BitmapFileHeader::from_data(&data_slice[0..FILE_HEADER_SIZE as usize]);
         assert!(f_header.validate());
 
         // NOTE(erick): We only support the basic header so far.
-        let info_header = BitmapInfoHeader::from_data(&data_slice[14..]);
+        let info_header =
+            BitmapInfoHeader::from_data(&data_slice[FILE_HEADER_SIZE as usize ..]);
         assert!(info_header.info_header_size == 40 ||
                 info_header.info_header_size == 56);
         assert!(info_header.compression_type == CompressionType::Uncompressed as u32 ||
@@ -593,7 +592,7 @@ impl Bitmap {
         let info_header = BitmapInfoHeader::new(INFO_HEADER_SIZE,
                                                width, height,
                                                image_data_size,
-                                               32, // TODO: Support other formats
+                                               32,
                                                CompressionType::BitFields);
 
         self.file_header = file_header;
@@ -704,7 +703,6 @@ impl Bitmap {
     //
     // Private stuff.
     //
-
     fn replace_rect_with_rect_from(&mut self, other: &Bitmap,
                                    src_x0 : u32, src_y0 : u32,
                                    dest_x0: u32, dest_y0: u32,
@@ -805,6 +803,10 @@ impl<'a> BytesWalker<'a> {
     // NOTE(erick): It would be nice to use generics to
     // generate this functions, but I don't know of
     // a way to get the size of a type at compile time.
+    // WARNING(erick): Theses functions only work
+    // because the bitmap format uses little-endianness
+    // and we are running on an little-endian machine.
+    // Sooner or later this will have to be fixed.
     fn next_u16(&mut self) -> u16 {
         let mut bytes = [0; 2];
         bytes.clone_from_slice(&self.data[self.current_index .. self.current_index + 2]);
