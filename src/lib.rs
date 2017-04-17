@@ -325,52 +325,22 @@ impl BitmapPixel {
     }
 
     pub fn black() -> BitmapPixel {
-        BitmapPixel {
-            red   : 0x00,
-            green : 0x00,
-            blue  : 0x00,
-            alpha : 0xff,
-        }
+        BitmapPixel::rgba(0x00, 0x00, 0x00, 0xff)
     }
     pub fn white() -> BitmapPixel {
-        BitmapPixel {
-            red   : 0xff,
-            green : 0xff,
-            blue  : 0xff,
-            alpha : 0xff,
-        }
+        BitmapPixel::rgba(0xff, 0xff, 0xff, 0xff)
     }
     pub fn red() -> BitmapPixel {
-        BitmapPixel {
-            red   : 0xff,
-            green : 0x00,
-            blue  : 0x00,
-            alpha : 0xff,
-        }
+        BitmapPixel::rgba(0xff, 0x00, 0x00, 0xff)
     }
     pub fn green() -> BitmapPixel {
-        BitmapPixel {
-            red   : 0x00,
-            green : 0xff,
-            blue  : 0x00,
-            alpha : 0xff,
-        }
+        BitmapPixel::rgba(0x00, 0xff, 0x00, 0xff)
     }
     pub fn blue() -> BitmapPixel {
-        BitmapPixel {
-            red   : 0x00,
-            green : 0x00,
-            blue  : 0xff,
-            alpha : 0xff,
-        }
+        BitmapPixel::rgba(0x00, 0x00, 0xff, 0xff)
     }
     pub fn transparent() -> BitmapPixel {
-        BitmapPixel {
-            red   : 0xff,
-            green : 0xff,
-            blue  : 0xff,
-            alpha : 0x00,
-        }
+        BitmapPixel::rgba(0xff, 0xff, 0xff, 0x00)
     }
 }
 
@@ -397,7 +367,7 @@ fn interpret_image_data(data: &[u8],
     // TODO(erick): bits_per_pixel can be 32 or 16 when BitFields
     // is used. The 16-bit variant is not supported yet.
     if compression_type == CompressionType::BitFields as u32 {
-        assert_eq!(32, bits_per_pixel); // NOTE: This must be true
+        assert_eq!(32, bits_per_pixel);
 
         let red_mask   = info_header.red_mask;
         let green_mask = info_header.green_mask;
@@ -473,7 +443,6 @@ fn interpret_image_data(data: &[u8],
     result
 }
 
-// TODO(erick): This function only supports 32-bit files with BitFields compression
 fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
                     bitmap_info: &BitmapInfoHeader) {
     // TODO(erick): Support 16-bit BitFields images.
@@ -572,7 +541,6 @@ impl Bitmap {
         result
     }
 
-    // TODO(erick): Create a BitmapError and a bitmap_io::Result
     pub fn from_file(file: &mut File) -> BitmapResult<Bitmap> {
         let mut data = Vec::new();
         file.read_to_end(&mut data)?;
