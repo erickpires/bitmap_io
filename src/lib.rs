@@ -8,13 +8,31 @@ use std::fs::File;
 use std::cmp::max;
 use std::ops::Range;
 
-
+use std::convert;
 use std::intrinsics::transmute;
 
 const BMP_MAGIC_NUMBER : u16 = 0x4d_42; // "MB": We are little-endian
 
 const FILE_HEADER_SIZE : u32 = 14;
 const INFO_HEADER_SIZE : u32 = 56;  // Basic header with color masks
+
+#[derive(Debug)]
+pub enum BitmapError {
+    InvalidBitmap,
+    UnsupportedInfoHeaderSize(u32),
+    UnsupportedNumberOfPlanes(u16),
+    UnsupportedCompressionType(CompressionType),
+    InvalidOperation,
+    BitmapIOError(std::io::Error),
+}
+
+impl convert::From<std::io::Error> for BitmapError {
+    fn from(err: std::io::Error) -> BitmapError {
+        BitmapError::BitmapIOError(err)
+    }
+}
+
+type BitmapResult<T> = Result<T, BitmapError>;
 
 #[derive(Debug)]
 pub struct BitmapFileHeader {
@@ -78,6 +96,7 @@ impl BitmapFileHeader {
 }
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub enum CompressionType {
     Uncompressed = 0x0000,
     Rle8         = 0x0001,
@@ -89,6 +108,24 @@ pub enum CompressionType {
     CmykRle8     = 0x000C,
     CmykRle4     = 0x000D,
 
+    Invalid, // Should never happen
+}
+
+impl CompressionType {
+    fn from_u32(num: u32) -> CompressionType {
+        match num {
+            0x0000 => CompressionType::Uncompressed,
+            0x0001 => CompressionType::Rle8,
+            0x0002 => CompressionType::Rle4,
+            0x0003 => CompressionType::BitFields,
+            0x0004 => CompressionType::Jpeg,
+            0x0005 => CompressionType::Png,
+            0x000B => CompressionType::CMYK,
+            0x000C => CompressionType::CmykRle8,
+            0x000D => CompressionType::CmykRle4,
+            _      => CompressionType::Invalid,
+        }
+    }
 }
 
 // NOTE(erick): This is the simplest ImageInfoHeader possible.
@@ -357,6 +394,8 @@ fn interpret_image_data(data: &[u8],
     let mut result = Vec::with_capacity(data.len());
 
 
+    // TODO(erick): bits_per_pixel can be 32 or 16 when BitFields
+    // is used. The 16-bit variant is not supported yet.
     if compression_type == CompressionType::BitFields as u32 {
         assert_eq!(32, bits_per_pixel); // NOTE: This must be true
 
@@ -493,26 +532,44 @@ impl Bitmap {
     }
 
     // TODO(erick): Create a BitmapError and a bitmap_io::Result
-    pub fn from_file(file: &mut File) -> std::io::Result<Bitmap> {
+    pub fn from_file(file: &mut File) -> BitmapResult<Bitmap> {
         let mut data = Vec::new();
         file.read_to_end(&mut data)?;
-        Ok(Bitmap::from_data(data))
+
+        Bitmap::from_data(data)
     }
 
-    pub fn from_data(data: Vec<u8>) -> Bitmap {
+    pub fn from_data(data: Vec<u8>) -> BitmapResult<Bitmap> {
         let data_slice = data.as_slice();
         let f_header =
             BitmapFileHeader::from_data(&data_slice[0..FILE_HEADER_SIZE as usize]);
-        assert!(f_header.validate());
+        if !f_header.validate() {
+            return Err(BitmapError::InvalidBitmap);
+        }
 
         // NOTE(erick): We only support the basic header so far.
         let info_header =
             BitmapInfoHeader::from_data(&data_slice[FILE_HEADER_SIZE as usize ..]);
-        assert!(info_header.info_header_size == 40 ||
-                info_header.info_header_size == 56);
-        assert!(info_header.compression_type == CompressionType::Uncompressed as u32 ||
-                info_header.compression_type == CompressionType::BitFields as u32);
-        assert_eq!(1, info_header.n_planes);
+
+        let i_header_size = info_header.info_header_size;
+        if i_header_size != 40 && i_header_size != 56 {
+            return Err(BitmapError::
+                       UnsupportedInfoHeaderSize(i_header_size))
+        }
+
+        let compression_type = CompressionType::from_u32(info_header.compression_type);
+        match compression_type {
+            CompressionType::Uncompressed | CompressionType::BitFields => {},
+            _ => {
+                return Err(BitmapError::
+                           UnsupportedCompressionType(compression_type))
+            },
+        }
+
+        if info_header.n_planes != 1 {
+            return Err(BitmapError::
+                       UnsupportedNumberOfPlanes(info_header.n_planes));
+        }
 
         let mut image_size_in_bytes = info_header.image_size as usize;
 
@@ -541,11 +598,13 @@ impl Bitmap {
         let image_data = interpret_image_data(&image_data_slice,
                                               &info_header);
 
-        Bitmap {
+        let result = Bitmap {
             file_header : f_header,
             info_header : info_header,
             image_data  : image_data,
-        }
+        };
+
+        Ok(result)
     }
 
     pub fn into_data(&self) -> Vec<u8> {
@@ -566,10 +625,15 @@ impl Bitmap {
         result
     }
 
-    pub fn into_file(&self, file: &mut File) -> std::io::Result<()> {
+    pub fn into_file(&self, file: &mut File) -> BitmapResult<()> {
         let data = self.into_data();
 
-        file.write_all(data.as_slice())
+        // NOTE(erick): For some reason io::Error was not been
+        // converted to BitmapIOError(io_error).
+        if let Err(io_error) = file.write_all(data.as_slice()) {
+            return Err(BitmapError::BitmapIOError(io_error));
+        }
+        Ok(())
     }
 
     pub fn convert_to_bitfield_compression(&mut self) {
@@ -640,22 +704,23 @@ impl Bitmap {
         }
     }
 
-    pub fn crop_to_rect(&self, x0: u32, y0: u32, width: u32, height: u32) -> Bitmap {
-        // TODO(erick): Fail successfully and return a Result
-        if width > self.info_header.image_width as u32 ||
-            height > self.info_header.image_height as u32 {
-                panic!("Cannot crop from a bigger region");
-            }
-
+    pub fn crop_to_rect(&self, x0: u32, y0: u32,
+                        width: u32, height: u32) -> BitmapResult<Bitmap> {
         if x0 >= self.info_header.image_width as u32 ||
             y0 >= self.info_header.image_height as u32 {
-                panic!("Point outside image");
-        }
+                return Err(BitmapError::InvalidOperation)
+            }
+
+        if x0 + width > self.info_header.image_width as u32 ||
+            y0 + height > self.info_header.image_height as u32 {
+                return Err(BitmapError::InvalidOperation)
+            }
+
 
         let mut result = Bitmap::lazy_new(width as i32, height as i32);
         result.copy_rect_from(self, x0, y0, width, height);
 
-        result
+        Ok(result)
     }
 
     pub fn merge_horizontally(image0: &Bitmap, image1: &Bitmap) -> Bitmap {
