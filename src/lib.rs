@@ -476,18 +476,59 @@ fn interpret_image_data(data: &[u8],
 // TODO(erick): This function only supports 32-bit files with BitFields compression
 fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
                     bitmap_info: &BitmapInfoHeader) {
-    let red_bit_offset   = bit_offset(bitmap_info.red_mask);
-    let green_bit_offset = bit_offset(bitmap_info.green_mask);
-    let blue_bit_offset  = bit_offset(bitmap_info.blue_mask);
-    let alpha_bit_offset = bit_offset(bitmap_info.alpha_mask);
+    // TODO(erick): Support 16-bit BitFields images.
+    if bitmap_info.compression_type == CompressionType::BitFields as u32 {
+        assert_eq!(32, bitmap_info.bits_per_pixel);
 
-    for pixel in pixels {
-        let pixel_value : u32 = (pixel.red as u32)   << red_bit_offset   |
-                                (pixel.green as u32) << green_bit_offset |
-                                (pixel.blue  as u32) << blue_bit_offset  |
-                                (pixel.alpha as u32) << alpha_bit_offset;
+        let red_bit_offset   = bit_offset(bitmap_info.red_mask);
+        let green_bit_offset = bit_offset(bitmap_info.green_mask);
+        let blue_bit_offset  = bit_offset(bitmap_info.blue_mask);
+        let alpha_bit_offset = bit_offset(bitmap_info.alpha_mask);
 
-        push_u32(data, pixel_value);
+        for pixel in pixels {
+            let pixel_value : u32 = (pixel.red as u32)   << red_bit_offset   |
+            (pixel.green as u32) << green_bit_offset |
+            (pixel.blue  as u32) << blue_bit_offset  |
+            (pixel.alpha as u32) << alpha_bit_offset & bitmap_info.alpha_mask;
+            // NOTE(erick): We and with alpha_mask so we can support ARGB and
+            // XRGB at the same time.
+
+            push_u32(data, pixel_value);
+        }
+    } else if bitmap_info.compression_type == CompressionType::Uncompressed as u32 {
+        if bitmap_info.bits_per_pixel == 32 {
+            for pixel in pixels {
+                data.push(pixel.blue);
+                data.push(pixel.green);
+                data.push(pixel.red);
+                data.push(0x00); // Padding
+            }
+        } else if bitmap_info.bits_per_pixel == 24 {
+            let mut pixel_iter = pixels.into_iter();
+
+            let bytes_per_row = bitmap_info.image_width * 3;
+            let n_padding_bytes = (4 - (bytes_per_row % 4)) % 4;
+
+            for _ in 0 .. bitmap_info.image_height {
+                for _ in 0 .. bitmap_info.image_width {
+                    let pixel = pixel_iter.next().unwrap();
+
+                    data.push(pixel.blue);
+                    data.push(pixel.green);
+                    data.push(pixel.red);
+                }
+
+                for _ in 0 .. n_padding_bytes {
+                    data.push(0x00);
+                }
+            }
+        } else {
+            panic!("pixels_to_data: Unsupported bpp: {}",
+                   bitmap_info.bits_per_pixel);
+        }
+    } else {
+        panic!("pixels_to_data: Unsupported compression: {:?}",
+               CompressionType::from_u32(bitmap_info.compression_type));
     }
 }
 
@@ -586,9 +627,6 @@ impl Bitmap {
                 image_size_in_bytes += (info_header.image_height * padding_per_row) as usize;
             }
         }
-
-        println!("{}", f_header);
-        println!("{}", info_header);
 
         let image_data_slice  = &data_slice[f_header.pixel_array_offset as usize ..
                                             f_header.pixel_array_offset as usize +
