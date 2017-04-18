@@ -371,7 +371,8 @@ fn map_zero_based(value: &mut u8, from: u32, to: u32) {
 }
 
 fn interpret_image_data(data: &[u8],
-                        info_header: &BitmapInfoHeader) -> Vec<BitmapPixel> {
+                        info_header: &BitmapInfoHeader,
+                        palette: &Option<BitmapPalette>) -> Vec<BitmapPixel> {
     let bits_per_pixel   = info_header.bits_per_pixel;
     let compression_type = info_header.compression_type;
 
@@ -455,7 +456,22 @@ fn interpret_image_data(data: &[u8],
                    bits_per_pixel);
         }
     } else if compression_type == CompressionType::Uncompressed as u32 {
-        if bits_per_pixel == 24 {
+        if bits_per_pixel == 32 {
+            // NOTE(erick): We only have alpha when the
+            // compression_type is BitFields. The last byte is
+            // here only for padding.
+            while data_walker.has_data() {
+                let pixel = BitmapPixel {
+                    blue  : data_walker.next_u8(),
+                    green : data_walker.next_u8(),
+                    red   : data_walker.next_u8(),
+                    alpha : 0xff,
+                };
+                // NOTE(erick): We have to discard the padding byte.
+                data_walker.next_u8();
+                result.push(pixel);
+            }
+        } else if bits_per_pixel == 24 {
             let mut column_index = 0;
             while data_walker.has_data() {
                 if column_index == info_header.image_width {
@@ -480,20 +496,16 @@ fn interpret_image_data(data: &[u8],
 
                 column_index += 1;
             }
-        } else if bits_per_pixel == 32 {
-            // NOTE(erick): We only have alpha when the
-            // compression_type is BitFields. The last byte is
-            // here only for padding.
-            while data_walker.has_data() {
-                let pixel = BitmapPixel {
-                    blue  : data_walker.next_u8(),
-                    green : data_walker.next_u8(),
-                    red   : data_walker.next_u8(),
-                    alpha : 0xff,
-                };
-                // NOTE(erick): We have to discard the padding byte.
-                data_walker.next_u8();
-                result.push(pixel);
+        } else if bits_per_pixel == 8 {
+            let image_palette = palette.as_ref().unwrap();
+
+            for _ in 0 .. info_header.image_width {
+                for _ in 0 .. info_header.image_height {
+                    let pixel_index = data_walker.next_u8() as usize;
+                    let pixel = image_palette[pixel_index];
+
+                    result.push(pixel);
+                }
             }
         } else {
             panic!("We don't support {} bits images yet", bits_per_pixel);
@@ -610,9 +622,33 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
     }
 }
 
+// TODO(erick): This is very similar to decoding a
+// 32-bit uncompressed image. Maybe we can generalize it.
+fn read_palette(data: &[u8]) -> BitmapPalette {
+    let mut data_walker = BytesWalker::new(data);
+    let mut result = Vec::with_capacity(data.len() / 4);
+
+    while data_walker.has_data() {
+        let pixel = BitmapPixel {
+            blue  : data_walker.next_u8(),
+            green : data_walker.next_u8(),
+            red   : data_walker.next_u8(),
+            alpha : 0xff,
+        };
+        data_walker.next_u8(); // We consume the last byte to keep the alignment
+
+        result.push(pixel)
+    }
+
+    result
+}
+
+pub type BitmapPalette = Vec<BitmapPixel>;
+
 pub  struct Bitmap {
     pub file_header : BitmapFileHeader,
     pub info_header : BitmapInfoHeader,
+    pub palette     : Option<BitmapPalette>,
     pub image_data  : Vec<BitmapPixel>,
 }
 
@@ -636,6 +672,7 @@ impl Bitmap {
         Bitmap {
             file_header : file_header,
             info_header : info_header,
+            palette     : None,
             image_data  : Vec::new(),
         }
     }
@@ -666,6 +703,10 @@ impl Bitmap {
 
         let info_header =
             BitmapInfoHeader::from_data(&data_slice[FILE_HEADER_SIZE as usize ..]);
+
+        println!("{}", f_header);
+        println!("{}", info_header);
+
         // NOTE(erick): We only support the basic header so far.
         let i_header_size = info_header.info_header_size;
         if i_header_size != 40 && i_header_size != 56 {
@@ -703,17 +744,31 @@ impl Bitmap {
             }
         }
 
+        let mut image_palette = None;
+        if info_header.bits_per_pixel == 1 ||
+            info_header.bits_per_pixel == 4 ||
+            info_header.bits_per_pixel == 8 {
+                let palette_offset = (FILE_HEADER_SIZE +
+                                      info_header.info_header_size) as usize;
+                let palette_data = &data_slice[palette_offset ..
+                                               f_header.pixel_array_offset as usize];
+
+                image_palette = Some(read_palette(palette_data));
+            }
+
+
         let image_data_slice  = &data_slice[f_header.pixel_array_offset as usize ..
                                             f_header.pixel_array_offset as usize +
                                             image_size_in_bytes];
 
         // TODO(erick): Decompressed the image!!!!
         let image_data = interpret_image_data(&image_data_slice,
-                                              &info_header);
+                                              &info_header, &image_palette);
 
         let result = Bitmap {
             file_header : f_header,
             info_header : info_header,
+            palette     : image_palette,
             image_data  : image_data,
         };
 
