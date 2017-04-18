@@ -492,20 +492,28 @@ fn interpret_image_data(data: &[u8],
                     red   : data_walker.next_u8(),
                     alpha : 0xff,
                 };
-                result.push(pixel);
 
+                result.push(pixel);
                 column_index += 1;
             }
         } else if bits_per_pixel == 8 {
             let image_palette = palette.as_ref().unwrap();
 
-            for _ in 0 .. info_header.image_width {
-                for _ in 0 .. info_header.image_height {
-                    let pixel_index = data_walker.next_u8() as usize;
-                    let pixel = image_palette[pixel_index];
+            let mut column_index = 0;
+            while data_walker.has_data() {
+                if column_index == info_header.image_width {
+                    column_index = 0;
+                    data_walker.align_with_u32();
 
-                    result.push(pixel);
+                    if !data_walker.has_data() {
+                        break;
+                    }
                 }
+                let pixel_index = data_walker.next_u8() as usize;
+                let pixel = image_palette[pixel_index];
+
+                result.push(pixel);
+                column_index += 1;
             }
         } else {
             panic!("We don't support {} bits images yet", bits_per_pixel);
