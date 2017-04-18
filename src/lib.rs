@@ -111,8 +111,8 @@ pub enum CompressionType {
     Invalid, // Should never happen
 }
 
-impl CompressionType {
-    fn from_u32(num: u32) -> CompressionType {
+impl convert::From<u32> for CompressionType {
+    fn from(num: u32) -> CompressionType {
         match num {
             0x0000 => CompressionType::Uncompressed,
             0x0001 => CompressionType::Rle8,
@@ -344,14 +344,30 @@ impl BitmapPixel {
     }
 }
 
-fn bit_offset(mask: u32) -> u8 {
-    match mask {
-        0xff000000 => 24,
-        0x00ff0000 => 16,
-        0x0000ff00 => 8,
-        0x000000ff => 0,
-        _          => 0,
+fn mask_offset_and_shifted(mut mask: u32) -> (u8, u32) {
+    if mask == 0 {
+        // Early-out
+        return (0, 0);
     }
+
+    // Shift right until we find the first one.
+    let mut offset = 0;
+    while mask & 0x01 == 0 {
+        mask = mask >> 1;
+        offset += 1;
+    }
+
+    (offset, mask)
+}
+
+// TODO(erick): Floating-point is slow. We have enough
+// precision to do it using fixed-point math.
+fn map_zero_based(value: &mut u8, from: u32, to: u32) {
+    // Don't do useless work and don't divide by zero.
+    if from == to || from == 0 { return; }
+
+    let t = (*value as f32) / from as f32;
+    *value = (to as f32 * t) as u8;
 }
 
 fn interpret_image_data(data: &[u8],
@@ -363,81 +379,128 @@ fn interpret_image_data(data: &[u8],
     //NOTE(erick): This is only true while we don't handle compression
     let mut result = Vec::with_capacity(data.len());
 
-
-    // TODO(erick): bits_per_pixel can be 32 or 16 when BitFields
-    // is used. The 16-bit variant is not supported yet.
     if compression_type == CompressionType::BitFields as u32 {
-        assert_eq!(32, bits_per_pixel);
-
         let red_mask   = info_header.red_mask;
         let green_mask = info_header.green_mask;
         let blue_mask  = info_header.blue_mask;
         let alpha_mask = info_header.alpha_mask;
 
-        let red_bit_offset   = bit_offset(red_mask);
-        let green_bit_offset = bit_offset(green_mask);
-        let blue_bit_offset  = bit_offset(blue_mask);
-        let alpha_bit_offset = bit_offset(alpha_mask);
+        let (red_offset,   red_shifted)   = mask_offset_and_shifted(red_mask);
+        let (green_offset, green_shifted) = mask_offset_and_shifted(green_mask);
+        let (blue_offset,  blue_shifted)  = mask_offset_and_shifted(blue_mask);
+        let (alpha_offset, alpha_shifted) = mask_offset_and_shifted(alpha_mask);
 
-        while data_walker.has_data() {
-            let pixel_value = data_walker.next_u32();
+        if bits_per_pixel == 32 {
+            while data_walker.has_data() {
+                let pixel_value = data_walker.next_u32();
 
-            let mut pixel = BitmapPixel {
-                blue  : ((pixel_value & blue_mask)  >> blue_bit_offset)  as u8,
-                green : ((pixel_value & green_mask) >> green_bit_offset) as u8,
-                red   : ((pixel_value & red_mask)   >> red_bit_offset)   as u8,
-                alpha : ((pixel_value & alpha_mask) >> alpha_bit_offset) as u8,
-            };
+                let mut pixel = BitmapPixel {
+                    blue  : ((pixel_value  >> blue_offset)  & 0xff) as u8,
+                    green : ((pixel_value  >> green_offset) & 0xff) as u8,
+                    red   : ((pixel_value  >> red_offset)   & 0xff) as u8,
+                    alpha : ((pixel_value  >> alpha_offset) & 0xff) as u8,
+                };
 
-            if alpha_mask == 0x00 {
-                // NOTE(erick): We are in XRGB mode.
-                pixel.alpha = 0xff;
+                if alpha_mask == 0x00 {
+                    // NOTE(erick): We are in XRGB mode.
+                    pixel.alpha = 0xff;
+                }
+
+                result.push(pixel);
             }
-
-            result.push(pixel);
-        }
-    } else if bits_per_pixel == 24 {
-        let mut column_index = 0;
-        while data_walker.has_data() {
-            if column_index == info_header.image_width {
-                // NOTE(erick): We have to align rows to
-                // 4 bytes values.
-                column_index = 0;
-                data_walker.align_with_u32();
+        } else if bits_per_pixel == 16 {
+            let mut pixels_read = 0;
+            while data_walker.has_data() {
+                if pixels_read == info_header.image_width {
+                    // NOTE(erick): We have to align rows to
+                    // 4 bytes values.
+                    pixels_read = 0;
+                    data_walker.align_with_u32();
+                }
 
                 // NOTE(erick): The file can have some padding at the end.
                 if !data_walker.has_data() {
                     break;
                 }
+
+                let pixel_value = data_walker.next_u16() as u32;
+
+                let mut pixel = BitmapPixel {
+                    blue  : ((pixel_value & blue_mask)  >> blue_offset)  as u8,
+                    green : ((pixel_value & green_mask) >> green_offset) as u8,
+                    red   : ((pixel_value & red_mask)   >> red_offset)   as u8,
+                    alpha : ((pixel_value & alpha_mask) >> alpha_offset) as u8,
+                };
+
+                map_zero_based(&mut pixel.red   , red_shifted, 0xff);
+                map_zero_based(&mut pixel.green , green_shifted, 0xff);
+                map_zero_based(&mut pixel.blue  , blue_shifted, 0xff);
+                map_zero_based(&mut pixel.alpha , alpha_shifted, 0xff);
+                // HACK: Since your map function is incorrect, we hardcode
+                // the alpha mapping.
+                // if pixel.alpha == 1 {
+                //     pixel.alpha = 0xff;
+                // }
+
+                if alpha_mask == 0x00 {
+                    // NOTE(erick): We are in XRGB mode.
+                    pixel.alpha = 0xff;
+                }
+
+                result.push(pixel);
+                pixels_read += 1;
             }
-
-            let pixel = BitmapPixel {
-                blue  : data_walker.next_u8(),
-                green : data_walker.next_u8(),
-                red   : data_walker.next_u8(),
-                alpha : 0xff,
-            };
-            result.push(pixel);
-
-            column_index += 1;
+        } else {
+            panic!("BitField is only compatible with 16 and 32 bit. Got: {}",
+                   bits_per_pixel);
         }
-    } else if bits_per_pixel == 32 {
-        // NOTE(erick): We only have alpha when the
-        // compression_type is BitFields. The last byte is
-        // here only for padding.
-        while data_walker.has_data() {
-            let pixel = BitmapPixel {
-                blue  : data_walker.next_u8(),
-                green : data_walker.next_u8(),
-                red   : data_walker.next_u8(),
-                alpha : 0xff,
-            };
-            // NOTE(erick): We have to discard the padding byte.
-            data_walker.next_u8();
-            result.push(pixel);
+    } else if compression_type == CompressionType::Uncompressed as u32 {
+        if bits_per_pixel == 24 {
+            let mut column_index = 0;
+            while data_walker.has_data() {
+                if column_index == info_header.image_width {
+                    // NOTE(erick): We have to align rows to
+                    // 4 bytes values.
+                    column_index = 0;
+                    data_walker.align_with_u32();
+
+                    // NOTE(erick): The file can have some padding at the end.
+                    if !data_walker.has_data() {
+                        break;
+                    }
+                }
+
+                let pixel = BitmapPixel {
+                    blue  : data_walker.next_u8(),
+                    green : data_walker.next_u8(),
+                    red   : data_walker.next_u8(),
+                    alpha : 0xff,
+                };
+                result.push(pixel);
+
+                column_index += 1;
+            }
+        } else if bits_per_pixel == 32 {
+            // NOTE(erick): We only have alpha when the
+            // compression_type is BitFields. The last byte is
+            // here only for padding.
+            while data_walker.has_data() {
+                let pixel = BitmapPixel {
+                    blue  : data_walker.next_u8(),
+                    green : data_walker.next_u8(),
+                    red   : data_walker.next_u8(),
+                    alpha : 0xff,
+                };
+                // NOTE(erick): We have to discard the padding byte.
+                data_walker.next_u8();
+                result.push(pixel);
+            }
+        } else {
+            panic!("We don't support {} bits images yet", bits_per_pixel);
         }
     } else {
-        panic!("We don't support {} bits images yet", bits_per_pixel);
+        panic!("We don't support {:?} compression yet",
+               CompressionType::from(compression_type));
     }
 
     result
@@ -449,10 +512,10 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
     if bitmap_info.compression_type == CompressionType::BitFields as u32 {
         assert_eq!(32, bitmap_info.bits_per_pixel);
 
-        let red_bit_offset   = bit_offset(bitmap_info.red_mask);
-        let green_bit_offset = bit_offset(bitmap_info.green_mask);
-        let blue_bit_offset  = bit_offset(bitmap_info.blue_mask);
-        let alpha_bit_offset = bit_offset(bitmap_info.alpha_mask);
+        let (red_bit_offset, _)   = mask_offset_and_shifted(bitmap_info.red_mask);
+        let (green_bit_offset, _) = mask_offset_and_shifted(bitmap_info.green_mask);
+        let (blue_bit_offset, _)  = mask_offset_and_shifted(bitmap_info.blue_mask);
+        let (alpha_bit_offset, _) = mask_offset_and_shifted(bitmap_info.alpha_mask);
 
         for pixel in pixels {
             let pixel_value : u32 = (pixel.red as u32)   << red_bit_offset   |
@@ -497,10 +560,9 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
         }
     } else {
         panic!("pixels_to_data: Unsupported compression: {:?}",
-               CompressionType::from_u32(bitmap_info.compression_type));
+               bitmap_info.compression_type);
     }
 }
-
 
 pub  struct Bitmap {
     pub file_header : BitmapFileHeader,
@@ -560,13 +622,16 @@ impl Bitmap {
         let info_header =
             BitmapInfoHeader::from_data(&data_slice[FILE_HEADER_SIZE as usize ..]);
 
+        println!("{}", f_header);
+        println!("{}", info_header);
+
         let i_header_size = info_header.info_header_size;
         if i_header_size != 40 && i_header_size != 56 {
             return Err(BitmapError::
                        UnsupportedInfoHeaderSize(i_header_size))
         }
 
-        let compression_type = CompressionType::from_u32(info_header.compression_type);
+        let compression_type = CompressionType::from(info_header.compression_type);
         match compression_type {
             CompressionType::Uncompressed | CompressionType::BitFields => {},
             _ => {
@@ -642,7 +707,7 @@ impl Bitmap {
         Ok(())
     }
 
-    pub fn convert_to_bitfield_compression(&mut self) {
+    pub fn convert_to_32_bitfield_compression(&mut self) {
         let width  = self.info_header.image_width;
         let height = self.info_header.image_height;
 
