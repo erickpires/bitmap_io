@@ -409,12 +409,12 @@ fn interpret_image_data(data: &[u8],
                 result.push(pixel);
             }
         } else if bits_per_pixel == 16 {
-            let mut pixels_read = 0;
+            let mut column_index = 0;
             while data_walker.has_data() {
-                if pixels_read == info_header.image_width {
+                if column_index == info_header.image_width {
                     // NOTE(erick): We have to align rows to
                     // 4 bytes values.
-                    pixels_read = 0;
+                    column_index = 0;
                     data_walker.align_with_u32();
                 }
 
@@ -448,7 +448,7 @@ fn interpret_image_data(data: &[u8],
                 }
 
                 result.push(pixel);
-                pixels_read += 1;
+                column_index += 1;
             }
         } else {
             panic!("BitField is only compatible with 16 and 32 bit. Got: {}",
@@ -506,6 +506,12 @@ fn interpret_image_data(data: &[u8],
     result
 }
 
+macro_rules! pad_to_align {
+    ($value:expr, $alignment:expr) => (
+        ($alignment - ($value % $alignment)) % $alignment
+    )
+}
+
 fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
                     bitmap_info: &BitmapInfoHeader) {
     // TODO(erick): Support 16-bit BitFields images.
@@ -527,8 +533,8 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
                 (pixel.green as u32) << green_offset |
                 (pixel.blue  as u32) << blue_offset  |
                 (pixel.alpha as u32) << alpha_offset & alpha_mask;
-                // NOTE(erick): We and with alpha_mask so we can support ARGB and
-                // XRGB at the same time.
+                // note(erick): we and with alpha_mask so we can support argb and
+                // xrgb at the same time.
 
                 push_u32(data, pixel_value);
             }
@@ -536,7 +542,7 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
             let mut pixel_iter = pixels.into_iter();
 
             let bytes_per_row = bitmap_info.image_width * 2;
-            let n_padding_bytes = (4 - (bytes_per_row % 4)) % 4;
+            let n_padding_bytes = pad_to_align!(bytes_per_row, 4);
 
             for _ in 0 .. bitmap_info.image_height {
                 for _ in 0 .. bitmap_info.image_width {
@@ -556,7 +562,6 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
                     // XRGB at the same time.
 
                     push_u16(data, pixel_value);
-
                 }
 
                 for _ in 0 .. n_padding_bytes {
@@ -580,7 +585,7 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
             let mut pixel_iter = pixels.into_iter();
 
             let bytes_per_row = bitmap_info.image_width * 3;
-            let n_padding_bytes = (4 - (bytes_per_row % 4)) % 4;
+            let n_padding_bytes = pad_to_align!(bytes_per_row, 4);
 
             for _ in 0 .. bitmap_info.image_height {
                 for _ in 0 .. bitmap_info.image_width {
@@ -659,13 +664,9 @@ impl Bitmap {
             return Err(BitmapError::InvalidBitmap);
         }
 
-        // NOTE(erick): We only support the basic header so far.
         let info_header =
             BitmapInfoHeader::from_data(&data_slice[FILE_HEADER_SIZE as usize ..]);
-
-        println!("{}", f_header);
-        println!("{}", info_header);
-
+        // NOTE(erick): We only support the basic header so far.
         let i_header_size = info_header.info_header_size;
         if i_header_size != 40 && i_header_size != 56 {
             return Err(BitmapError::
@@ -697,7 +698,7 @@ impl Bitmap {
 
             if info_header.bits_per_pixel == 24 {
                 // NOTE(erick): We need to add the padding bytes.
-                let padding_per_row = (4 - (3 * info_header.image_width % 4)) % 4;
+                let padding_per_row = pad_to_align!(3 * info_header.image_width, 4);
                 image_size_in_bytes += (info_header.image_height * padding_per_row) as usize;
             }
         }
@@ -1009,11 +1010,9 @@ impl<'a> BytesWalker<'a> {
     }
 
     fn align_with_u32(&mut self) {
-        let rem = self.current_index % 4;
+        let pad = pad_to_align!(self.current_index, 4);
 
-        if rem != 0 {
-            self.current_index += 4 - rem;
-        }
+        self.current_index += pad;
     }
 }
 
