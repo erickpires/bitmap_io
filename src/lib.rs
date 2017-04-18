@@ -510,23 +510,64 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
                     bitmap_info: &BitmapInfoHeader) {
     // TODO(erick): Support 16-bit BitFields images.
     if bitmap_info.compression_type == CompressionType::BitFields as u32 {
-        assert_eq!(32, bitmap_info.bits_per_pixel);
+        let red_mask = bitmap_info.red_mask;
+        let green_mask = bitmap_info.green_mask;
+        let blue_mask = bitmap_info.blue_mask;
+        let alpha_mask = bitmap_info.alpha_mask;
 
-        let (red_bit_offset, _)   = mask_offset_and_shifted(bitmap_info.red_mask);
-        let (green_bit_offset, _) = mask_offset_and_shifted(bitmap_info.green_mask);
-        let (blue_bit_offset, _)  = mask_offset_and_shifted(bitmap_info.blue_mask);
-        let (alpha_bit_offset, _) = mask_offset_and_shifted(bitmap_info.alpha_mask);
+        let (red_offset, red_shifted)   = mask_offset_and_shifted(red_mask);
+        let (green_offset, green_shifted) = mask_offset_and_shifted(green_mask);
+        let (blue_offset, blue_shifted)  = mask_offset_and_shifted(blue_mask);
+        let (alpha_offset, alpha_shifted) = mask_offset_and_shifted(alpha_mask);
 
-        for pixel in pixels {
-            let pixel_value : u32 = (pixel.red as u32)   << red_bit_offset   |
-            (pixel.green as u32) << green_bit_offset |
-            (pixel.blue  as u32) << blue_bit_offset  |
-            (pixel.alpha as u32) << alpha_bit_offset & bitmap_info.alpha_mask;
-            // NOTE(erick): We and with alpha_mask so we can support ARGB and
-            // XRGB at the same time.
+        if bitmap_info.bits_per_pixel == 32 {
+            for pixel in pixels {
+                let pixel_value : u32 =
+                    (pixel.red as u32)   << red_offset   |
+                (pixel.green as u32) << green_offset |
+                (pixel.blue  as u32) << blue_offset  |
+                (pixel.alpha as u32) << alpha_offset & alpha_mask;
+                // NOTE(erick): We and with alpha_mask so we can support ARGB and
+                // XRGB at the same time.
 
-            push_u32(data, pixel_value);
+                push_u32(data, pixel_value);
+            }
+        } else if bitmap_info.bits_per_pixel == 16 {
+            let mut pixel_iter = pixels.into_iter();
+
+            let bytes_per_row = bitmap_info.image_width * 2;
+            let n_padding_bytes = (4 - (bytes_per_row % 4)) % 4;
+
+            for _ in 0 .. bitmap_info.image_height {
+                for _ in 0 .. bitmap_info.image_width {
+                    let mut pixel = pixel_iter.next().unwrap().clone();
+
+                    map_zero_based(&mut pixel.red, 0xff, red_shifted);
+                    map_zero_based(&mut pixel.green, 0xff, green_shifted);
+                    map_zero_based(&mut pixel.blue, 0xff, blue_shifted);
+                    map_zero_based(&mut pixel.alpha, 0xff, alpha_shifted);
+
+                    let pixel_value : u16 =
+                        (pixel.red as u16)   << red_offset   |
+                    (pixel.green as u16) << green_offset |
+                    (pixel.blue  as u16) << blue_offset  |
+                    (pixel.alpha as u16) << alpha_offset & alpha_mask as u16;
+                    // NOTE(erick): We and with alpha_mask so we can support ARGB and
+                    // XRGB at the same time.
+
+                    push_u16(data, pixel_value);
+
+                }
+
+                for _ in 0 .. n_padding_bytes {
+                    data.push(0x00);
+                }
+            }
+        } else {
+            panic!("BitField is only compatible with 16 and 32 bit. Got: {}",
+                   bitmap_info.bits_per_pixel);
         }
+
     } else if bitmap_info.compression_type == CompressionType::Uncompressed as u32 {
         if bitmap_info.bits_per_pixel == 32 {
             for pixel in pixels {

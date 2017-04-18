@@ -40,7 +40,6 @@ fn main() {
     }
 
     if let Ok(mut out_file) = File::create("test_16-bitfield-result.bmp") {
-        test_16_bitfield.convert_to_32_bitfield_compression();
         test_16_bitfield.into_file(&mut out_file);
     }
 
