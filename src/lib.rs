@@ -780,6 +780,44 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
                 }
             }
         } else if bitmap_info.bits_per_pixel == 1 {
+            let pixels_slice = pixels.as_slice();
+            let image_palette = palette.as_ref().unwrap();
+
+            let remaining_pixels_per_row = (bitmap_info.image_width -
+                (bitmap_info.image_width / 8) * 8) as usize;
+
+            let bits_per_row =
+                bitmap_info.image_width + pad_to_align!(bitmap_info.image_width, 8);
+            let bytes_per_row = bits_per_row / 8;
+            let n_padding_bytes = pad_to_align!(bytes_per_row, 4);
+
+
+            let mut total_pixels_written = 0;
+            for _ in 0 .. bitmap_info.image_height {
+                for _ in 0 .. bitmap_info.image_width / 8 {
+                    let pixels_block = &pixels_slice[total_pixels_written ..
+                                                     total_pixels_written + 8];
+
+                    let byte_data = byte_from_pixels(image_palette, pixels_block);
+                    data.push(byte_data);
+
+                    total_pixels_written += 8;
+                }
+
+                if remaining_pixels_per_row != 0 {
+                    let pixels_block = &pixels_slice[total_pixels_written ..
+                                                     total_pixels_written +
+                                                     remaining_pixels_per_row];
+
+                    let byte_data = byte_from_pixels(image_palette, pixels_block);
+                    data.push(byte_data);
+                    total_pixels_written += remaining_pixels_per_row;
+                }
+
+                for _ in 0 .. n_padding_bytes {
+                    data.push(0x00);
+                }
+            }
 
         } else {
             panic!("pixels_to_data: Error: {} bits is not a valid format.",
@@ -789,6 +827,22 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
         panic!("pixels_to_data: Unsupported compression: {:?}",
                bitmap_info.compression_type);
     }
+}
+
+fn byte_from_pixels(palette: &BitmapPalette, pixels: &[BitmapPixel]) -> u8 {
+    let mut mask = 0x80;
+    let mut result = 0;
+
+    for pixel in pixels {
+        let p_index = pixel.find_closest_by_index(palette);
+        if p_index != 0 {
+            result |= mask;
+        }
+
+        mask = mask >> 1;
+    }
+
+    result
 }
 
 // TODO(erick): This is very similar to decoding a
