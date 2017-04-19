@@ -547,6 +547,35 @@ fn interpret_image_data(data: &[u8],
                 result.push(pixel);
                 column_index += 1;
             }
+        }
+        else if bits_per_pixel == 4 {
+            let image_palette = palette.as_ref().unwrap();
+
+            let mut column_index = 0;
+            while data_walker.has_data() {
+                if column_index >= info_header.image_width {
+                    column_index = 0;
+                    data_walker.align_with_u32();
+
+                    if !data_walker.has_data() {
+                        break;
+                    }
+                }
+                let pixels_indexes = data_walker.next_u8();
+                let p0_index = (pixels_indexes >> 4) as usize;
+                let p1_index = (pixels_indexes & 0x0f) as usize;
+
+                let pixel0 = image_palette[p0_index];
+                let pixel1 = image_palette[p1_index];
+
+                result.push(pixel0);
+                column_index += 1;
+
+                if column_index < info_header.image_width {
+                    result.push(pixel1);
+                    column_index += 1;
+                }
+            }
         } else {
             panic!("We don't support {} bits images yet", bits_per_pixel);
         }
