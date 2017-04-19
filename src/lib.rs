@@ -1,8 +1,10 @@
 #[macro_use]
 mod bitmap_read;
+mod bitmap_write;
 
-use bitmap_read::BytesWalker;
-use bitmap_read::map_zero_based;
+use bitmap_write::push_u32;
+use bitmap_write::push_i32;
+use bitmap_write::push_u16;
 
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -15,6 +17,8 @@ use std::cmp::max;
 use std::ops::Range;
 
 use std::convert;
+
+use std::intrinsics::transmute;
 
 const BMP_MAGIC_NUMBER : u16 = 0x4d_42; // "MB": We are little-endian
 
@@ -417,11 +421,13 @@ fn interpret_image_data(data: &[u8],
             bitmap_read::read_32_bitfield(&mut data_walker, &mut result,
                                          red_mask, green_mask,
                                          blue_mask, alpha_mask);
+
         } else if bits_per_pixel == 16 {
             bitmap_read::read_16_bitfield(&mut data_walker, &mut result,
                                          info_header.image_width,
                                          red_mask, green_mask,
                                          blue_mask, alpha_mask);
+
         } else {
             panic!("BitField is only compatible with 16 and 32 bit. Got: {}",
                    bits_per_pixel);
@@ -429,15 +435,17 @@ fn interpret_image_data(data: &[u8],
     } else if compression_type == CompressionType::Uncompressed as u32 {
         if bits_per_pixel == 32 {
             bitmap_read::read_32_uncompressed(&mut data_walker, &mut result);
+
         } else if bits_per_pixel == 24 {
             bitmap_read::read_24_uncompressed(&mut data_walker, &mut result,
                                              info_header.image_width);
+
         } else if bits_per_pixel == 8 {
             bitmap_read::read_8_uncompressed(&mut data_walker, &mut result,
                                             info_header.image_width,
                                             palette.as_ref().unwrap());
-        }
-        else if bits_per_pixel == 4 {
+
+        }else if bits_per_pixel == 4 {
             bitmap_read::read_4_uncompressed(&mut data_walker, &mut result,
                                             info_header.image_width,
                                             palette.as_ref().unwrap());
@@ -468,177 +476,48 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
         let blue_mask = bitmap_info.blue_mask;
         let alpha_mask = bitmap_info.alpha_mask;
 
-        let (red_offset, red_shifted)   = mask_offset_and_shifted(red_mask);
-        let (green_offset, green_shifted) = mask_offset_and_shifted(green_mask);
-        let (blue_offset, blue_shifted)  = mask_offset_and_shifted(blue_mask);
-        let (alpha_offset, alpha_shifted) = mask_offset_and_shifted(alpha_mask);
-
         if bitmap_info.bits_per_pixel == 32 {
-            for pixel in pixels {
-                let pixel_value : u32 =
-                    (pixel.red as u32)   << red_offset   |
-                (pixel.green as u32) << green_offset |
-                (pixel.blue  as u32) << blue_offset  |
-                (pixel.alpha as u32) << alpha_offset & alpha_mask;
-                // NOTE(erick): we and with alpha_mask so we can support argb and
-                // xrgb at the same time.
+            bitmap_write::write_32_bitfield(data, pixels,
+                                           red_mask, green_mask,
+                                           blue_mask, alpha_mask);
 
-                push_u32(data, pixel_value);
-            }
         } else if bitmap_info.bits_per_pixel == 16 {
-            let mut pixel_iter = pixels.into_iter();
+            bitmap_write::write_16_bitfield(data, pixels,
+                                           bitmap_info.image_width,
+                                           bitmap_info.image_height,
+                                           red_mask, green_mask,
+                                           blue_mask, alpha_mask);
 
-            let bytes_per_row = bitmap_info.image_width * 2;
-            let n_padding_bytes = pad_to_align!(bytes_per_row, 4);
-
-            for _ in 0 .. bitmap_info.image_height {
-                for _ in 0 .. bitmap_info.image_width {
-                    let mut pixel = pixel_iter.next().unwrap().clone();
-
-                    map_zero_based(&mut pixel.red, 0xff, red_shifted);
-                    map_zero_based(&mut pixel.green, 0xff, green_shifted);
-                    map_zero_based(&mut pixel.blue, 0xff, blue_shifted);
-                    map_zero_based(&mut pixel.alpha, 0xff, alpha_shifted);
-
-                    let pixel_value : u16 =
-                        (pixel.red as u16)   << red_offset   |
-                    (pixel.green as u16) << green_offset |
-                    (pixel.blue  as u16) << blue_offset  |
-                    (pixel.alpha as u16) << alpha_offset & alpha_mask as u16;
-                    // NOTE(erick): We and with alpha_mask so we can support ARGB and
-                    // XRGB at the same time.
-
-                    push_u16(data, pixel_value);
-                }
-
-                for _ in 0 .. n_padding_bytes {
-                    data.push(0x00);
-                }
-            }
         } else {
             panic!("BitField is only compatible with 16 and 32 bit. Got: {}",
                    bitmap_info.bits_per_pixel);
         }
-
     } else if bitmap_info.compression_type == CompressionType::Uncompressed as u32 {
         if bitmap_info.bits_per_pixel == 32 {
-            for pixel in pixels {
-                data.push(pixel.blue);
-                data.push(pixel.green);
-                data.push(pixel.red);
-                data.push(0x00); // Padding
-            }
+            bitmap_write::write_32_uncompressed(data, pixels);
+
         } else if bitmap_info.bits_per_pixel == 24 {
-            let mut pixel_iter = pixels.into_iter();
+            bitmap_write::write_24_uncompressed(data, pixels,
+                                               bitmap_info.image_width,
+                                               bitmap_info.image_height);
 
-            let bytes_per_row = bitmap_info.image_width * 3;
-            let n_padding_bytes = pad_to_align!(bytes_per_row, 4);
-
-            for _ in 0 .. bitmap_info.image_height {
-                for _ in 0 .. bitmap_info.image_width {
-                    let pixel = pixel_iter.next().unwrap();
-
-                    data.push(pixel.blue);
-                    data.push(pixel.green);
-                    data.push(pixel.red);
-                }
-
-                for _ in 0 .. n_padding_bytes {
-                    data.push(0x00);
-                }
-            }
         } else if bitmap_info.bits_per_pixel == 8 {
-            let mut pixel_iter = pixels.into_iter();
-            let image_palette = palette.as_ref().unwrap();
-
-            let n_padding_bytes = pad_to_align!(bitmap_info.image_width, 4);
-
-            for _ in 0 .. bitmap_info.image_height {
-                for _ in 0 .. bitmap_info.image_width {
-                    let pixel = pixel_iter.next().unwrap();
-
-                    let palette_index = pixel.find_closest_by_index(image_palette) as u8;
-                    data.push(palette_index);
-                }
-
-                for _ in 0 .. n_padding_bytes {
-                    data.push(0x00);
-                }
-            }
+            bitmap_write::write_8_uncompressed(data, pixels,
+                                              palette.as_ref().unwrap(),
+                                              bitmap_info.image_width,
+                                              bitmap_info.image_height);
 
         } else if bitmap_info.bits_per_pixel == 4 {
-            let mut pixel_iter = pixels.into_iter();
-            let image_palette = palette.as_ref().unwrap();
+            bitmap_write::write_4_uncompressed(data, pixels,
+                                              palette.as_ref().unwrap(),
+                                              bitmap_info.image_width,
+                                              bitmap_info.image_height);
 
-            let bytes_per_row = (bitmap_info.image_width + 1) / 2;
-            let n_padding_bytes = pad_to_align!(bytes_per_row, 4);
-
-            for _ in 0 .. bitmap_info.image_height {
-                let mut pixels_written = 0;
-                for _ in 0 .. bitmap_info.image_width / 2 {
-                    let pixel0 = pixel_iter.next().unwrap();
-                    let pixel1 = pixel_iter.next().unwrap();
-
-                    let p0_index = pixel0.find_closest_by_index(image_palette) as u8;
-                    let p1_index = pixel1.find_closest_by_index(image_palette) as u8;
-
-                    let pixel_data = (p0_index << 4) | (p1_index & 0x0f);
-                    data.push(pixel_data);
-                    pixels_written += 2;
-                }
-
-                // NOTE(erick): We still have one pixel to write.
-                if pixels_written < bitmap_info.image_width {
-                    let pixel = pixel_iter.next().unwrap();
-                    let p_index = pixel.find_closest_by_index(image_palette) as u8;
-
-                    let pixel_data = p_index << 4;
-                    data.push(pixel_data);
-                }
-
-                for _ in 0 .. n_padding_bytes {
-                    data.push(0x00);
-                }
-            }
         } else if bitmap_info.bits_per_pixel == 1 {
-            let pixels_slice = pixels.as_slice();
-            let image_palette = palette.as_ref().unwrap();
-
-            let remaining_pixels_per_row = (bitmap_info.image_width -
-                (bitmap_info.image_width / 8) * 8) as usize;
-
-            let bits_per_row =
-                bitmap_info.image_width + pad_to_align!(bitmap_info.image_width, 8);
-            let bytes_per_row = bits_per_row / 8;
-            let n_padding_bytes = pad_to_align!(bytes_per_row, 4);
-
-
-            let mut total_pixels_written = 0;
-            for _ in 0 .. bitmap_info.image_height {
-                for _ in 0 .. bitmap_info.image_width / 8 {
-                    let pixels_block = &pixels_slice[total_pixels_written ..
-                                                     total_pixels_written + 8];
-
-                    let byte_data = byte_from_pixels(image_palette, pixels_block);
-                    data.push(byte_data);
-
-                    total_pixels_written += 8;
-                }
-
-                if remaining_pixels_per_row != 0 {
-                    let pixels_block = &pixels_slice[total_pixels_written ..
-                                                     total_pixels_written +
-                                                     remaining_pixels_per_row];
-
-                    let byte_data = byte_from_pixels(image_palette, pixels_block);
-                    data.push(byte_data);
-                    total_pixels_written += remaining_pixels_per_row;
-                }
-
-                for _ in 0 .. n_padding_bytes {
-                    data.push(0x00);
-                }
-            }
+            bitmap_write::write_1_uncompressed(data, pixels,
+                                              palette.as_ref().unwrap(),
+                                              bitmap_info.image_width,
+                                              bitmap_info.image_height);
 
         } else {
             panic!("pixels_to_data: Error: {} bits is not a valid format.",
@@ -648,22 +527,6 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
         panic!("pixels_to_data: Unsupported compression: {:?}",
                bitmap_info.compression_type);
     }
-}
-
-fn byte_from_pixels(palette: &BitmapPalette, pixels: &[BitmapPixel]) -> u8 {
-    let mut mask = 0x80;
-    let mut result = 0;
-
-    for pixel in pixels {
-        let p_index = pixel.find_closest_by_index(palette);
-        if p_index != 0 {
-            result |= mask;
-        }
-
-        mask = mask >> 1;
-    }
-
-    result
 }
 
 // TODO(erick): This is very similar to decoding a
@@ -1067,22 +930,75 @@ fn mirror_slice<T>(slice: &mut [T]) where T: Copy {
     }
 }
 
-fn push_u32(v: &mut Vec<u8>, value: u32) {
-    // NOTE(erick): Little-endian.
-    v.push((value >>  0) as u8);
-    v.push((value >>  8) as u8);
-    v.push((value >> 16) as u8);
-    v.push((value >> 24) as u8);
+
+// TODO(erick): Floating-point is slow. We have enough
+// precision to do it using fixed-point math.
+pub fn map_zero_based(value: &mut u8, from: u32, to: u32) {
+    // Don't do useless work and don't divide by zero.
+    if from == to || from == 0 { return; }
+
+    let t = (*value as f32) / from as f32;
+    *value = (to as f32 * t) as u8;
 }
-fn push_i32(v: &mut Vec<u8>, value: i32) {
-    // NOTE(erick): Little-endian.
-    v.push((value >>  0) as u8);
-    v.push((value >>  8) as u8);
-    v.push((value >> 16) as u8);
-    v.push((value >> 24) as u8);
+
+pub struct BytesWalker<'a> {
+    data          : &'a [u8],
+    current_index : usize,
 }
-fn push_u16(v: &mut Vec<u8>, value: u16) {
-    // NOTE(erick): Little-endian.
-    v.push((value >>  0) as u8);
-    v.push((value >>  8) as u8);
+
+impl<'a> BytesWalker<'a> {
+    pub fn new(d: &[u8]) -> BytesWalker {
+        BytesWalker {
+            data          : d,
+            current_index : 0,
+        }
+    }
+
+    pub fn has_data(&self) -> bool {
+        self.current_index < self.data.len()
+    }
+
+    pub fn next_u8(&mut self) -> u8 {
+        let result = self.data[self.current_index];
+        self.current_index += 1;
+
+        result
+    }
+
+    // NOTE(erick): It would be nice to use generics to
+    // generate this functions, but I don't know of
+    // a way to get the size of a type at compile time.
+    // WARNING(erick): Theses functions only work
+    // because the bitmap format uses little-endianness
+    // and we are running on an little-endian machine.
+    // Sooner or later this will have to be fixed.
+    pub fn next_u16(&mut self) -> u16 {
+        let mut bytes = [0; 2];
+        bytes.clone_from_slice(&self.data[self.current_index .. self.current_index + 2]);
+        self.current_index += 2;
+
+        unsafe { transmute(bytes) }
+    }
+
+    pub fn next_u32(&mut self) -> u32 {
+        let mut bytes = [0; 4];
+        bytes.clone_from_slice(&self.data[self.current_index .. self.current_index + 4]);
+        self.current_index += 4;
+
+        unsafe { transmute(bytes) }
+    }
+
+    pub fn next_i32(&mut self) -> i32 {
+        let mut bytes = [0; 4];
+        bytes.clone_from_slice(&self.data[self.current_index .. self.current_index + 4]);
+        self.current_index += 4;
+
+        unsafe { transmute(bytes) }
+    }
+
+    pub fn align_with_u32(&mut self) {
+        let pad = pad_to_align!(self.current_index, 4);
+
+        self.current_index += pad;
+    }
 }

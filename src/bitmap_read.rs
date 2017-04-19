@@ -1,8 +1,9 @@
+use BytesWalker;
 use BitmapPixel;
 use BitmapPalette;
 use mask_offset_and_shifted;
 
-use std::intrinsics::transmute;
+use map_zero_based;
 
 #[macro_export]
 macro_rules! pad_to_align {
@@ -80,11 +81,6 @@ pub fn read_16_bitfield(data_walker: &mut BytesWalker,
         map_zero_based(&mut pixel.green , green_shifted, 0xff);
         map_zero_based(&mut pixel.blue  , blue_shifted, 0xff);
         map_zero_based(&mut pixel.alpha , alpha_shifted, 0xff);
-        // HACK: Since your map function is incorrect, we hardcode
-        // the alpha mapping.
-        // if pixel.alpha == 1 {
-        //     pixel.alpha = 0xff;
-        // }
 
         if alpha_mask == 0x00 {
             // NOTE(erick): We are in XRGB mode.
@@ -222,78 +218,6 @@ pub fn read_1_uncompressed(data_walker: &mut BytesWalker,
 
         data_walker.align_with_u32()
     }
-}
-
-pub struct BytesWalker<'a> {
-    data          : &'a [u8],
-    current_index : usize,
-}
-
-impl<'a> BytesWalker<'a> {
-    pub fn new(d: &[u8]) -> BytesWalker {
-        BytesWalker {
-            data          : d,
-            current_index : 0,
-        }
-    }
-
-    pub fn has_data(&self) -> bool {
-        self.current_index < self.data.len()
-    }
-
-    pub fn next_u8(&mut self) -> u8 {
-        let result = self.data[self.current_index];
-        self.current_index += 1;
-
-        result
-    }
-
-    // NOTE(erick): It would be nice to use generics to
-    // generate this functions, but I don't know of
-    // a way to get the size of a type at compile time.
-    // WARNING(erick): Theses functions only work
-    // because the bitmap format uses little-endianness
-    // and we are running on an little-endian machine.
-    // Sooner or later this will have to be fixed.
-    pub fn next_u16(&mut self) -> u16 {
-        let mut bytes = [0; 2];
-        bytes.clone_from_slice(&self.data[self.current_index .. self.current_index + 2]);
-        self.current_index += 2;
-
-        unsafe { transmute(bytes) }
-    }
-
-    pub fn next_u32(&mut self) -> u32 {
-        let mut bytes = [0; 4];
-        bytes.clone_from_slice(&self.data[self.current_index .. self.current_index + 4]);
-        self.current_index += 4;
-
-        unsafe { transmute(bytes) }
-    }
-
-    pub fn next_i32(&mut self) -> i32 {
-        let mut bytes = [0; 4];
-        bytes.clone_from_slice(&self.data[self.current_index .. self.current_index + 4]);
-        self.current_index += 4;
-
-        unsafe { transmute(bytes) }
-    }
-
-    pub fn align_with_u32(&mut self) {
-        let pad = pad_to_align!(self.current_index, 4);
-
-        self.current_index += pad;
-    }
-}
-
-// TODO(erick): Floating-point is slow. We have enough
-// precision to do it using fixed-point math.
-pub fn map_zero_based(value: &mut u8, from: u32, to: u32) {
-    // Don't do useless work and don't divide by zero.
-    if from == to || from == 0 { return; }
-
-    let t = (*value as f32) / from as f32;
-    *value = (to as f32 * t) as u8;
 }
 
 fn append_pixels_from_byte(palette: &BitmapPalette,
