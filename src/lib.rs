@@ -576,12 +576,57 @@ fn interpret_image_data(data: &[u8],
                     column_index += 1;
                 }
             }
+        } else if bits_per_pixel == 1 {
+            let image_palette = palette.as_ref().unwrap();
+
+            for _ in 0 .. info_header.image_height {
+                let mut column_index = 0;
+                for _ in 0 .. info_header.image_width / 8 {
+                    let pixels_byte = data_walker.next_u8();
+                    let mut pixels = get_pixels_from_byte(&image_palette,
+                                                      pixels_byte, 8);
+
+                    result.append(&mut pixels);
+                    column_index += 8;
+                }
+
+                let remaining_pixels = info_header.image_width - column_index;
+                if remaining_pixels > 0 {
+                    let pixels_byte = data_walker.next_u8();
+                    let mut pixels = get_pixels_from_byte(&image_palette,
+                                                          pixels_byte,
+                                                          remaining_pixels);
+
+                    result.append(&mut pixels);
+                }
+
+                data_walker.align_with_u32()
+            }
+
         } else {
             panic!("We don't support {} bits images yet", bits_per_pixel);
         }
     } else {
         panic!("We don't support {:?} compression yet",
                CompressionType::from(compression_type));
+    }
+
+    result
+}
+
+fn get_pixels_from_byte(palette: &BitmapPalette,
+                        byte: u8, n_bits: i32) -> Vec<BitmapPixel> {
+    let mut result = Vec::new();
+    let mut mask = 0x80;
+
+    for _ in 0 .. n_bits {
+        if byte & mask == 0 {
+            result.push(palette[0]);
+        } else {
+            result.push(palette[1]);
+        }
+
+        mask = mask >> 1;
     }
 
     result
