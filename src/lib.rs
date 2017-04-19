@@ -604,7 +604,7 @@ fn interpret_image_data(data: &[u8],
             }
 
         } else {
-            panic!("We don't support {} bits images yet", bits_per_pixel);
+            panic!("Error: {} bits is not a valid format.", bits_per_pixel);
         }
     } else {
         panic!("We don't support {:?} compression yet",
@@ -641,7 +641,6 @@ macro_rules! pad_to_align {
 fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
                     bitmap_info: &BitmapInfoHeader,
                     palette: &Option<BitmapPalette>) {
-    // TODO(erick): Support 16-bit BitFields images.
     if bitmap_info.compression_type == CompressionType::BitFields as u32 {
         let red_mask = bitmap_info.red_mask;
         let green_mask = bitmap_info.green_mask;
@@ -660,7 +659,7 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
                 (pixel.green as u32) << green_offset |
                 (pixel.blue  as u32) << blue_offset  |
                 (pixel.alpha as u32) << alpha_offset & alpha_mask;
-                // note(erick): we and with alpha_mask so we can support argb and
+                // NOTE(erick): we and with alpha_mask so we can support argb and
                 // xrgb at the same time.
 
                 push_u32(data, pixel_value);
@@ -780,8 +779,10 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
                     data.push(0x00);
                 }
             }
+        } else if bitmap_info.bits_per_pixel == 1 {
+
         } else {
-            panic!("pixels_to_data: Unsupported bpp: {}",
+            panic!("pixels_to_data: Error: {} bits is not a valid format.",
                    bitmap_info.bits_per_pixel);
         }
     } else {
