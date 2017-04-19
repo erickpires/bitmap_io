@@ -23,7 +23,6 @@ use std::intrinsics::transmute;
 const BMP_MAGIC_NUMBER : u16 = 0x4d_42; // "MB": We are little-endian
 
 const FILE_HEADER_SIZE : u32 = 14;
-const INFO_HEADER_SIZE : u32 = 56;  // Basic header with color masks
 
 #[derive(Debug)]
 pub enum BitmapError {
@@ -194,9 +193,24 @@ impl Display for BitmapInfoHeader {
 
 #[allow(dead_code)]
 impl BitmapInfoHeader {
-    fn new(h_size: u32, i_width: i32, i_height: i32, i_size: u32,
+    fn new(i_width: i32, i_height: i32,
            bits_per_pixel: u16,
            compression: CompressionType) -> BitmapInfoHeader {
+        let h_size = match compression {
+            CompressionType::BitFields => 56,
+            _                         => 40,
+        };
+
+        let mut bits_per_row = i_width as u32 * bits_per_pixel as u32;
+        let bits_padding = pad_to_align!(bits_per_row, 8);
+        bits_per_row += bits_padding;
+
+        let mut bytes_per_row = bits_per_row / 8;
+        let bytes_padding = pad_to_align!(bytes_per_row, 4);
+        bytes_per_row += bytes_padding;
+
+        let i_size = bytes_per_row * i_height as u32;
+
         BitmapInfoHeader {
             info_header_size   : h_size,
             image_width        : i_width,
@@ -559,21 +573,28 @@ pub  struct Bitmap {
 
 impl Bitmap {
 
-    pub fn lazy_new(width: i32, height: i32) -> Bitmap {
-        let n_pixels = (width * height) as u32;
-        // NOTE(erick): Only true when using 32-bit pixels and no compression.
-        let image_data_size = n_pixels * 4;
+    pub fn create_headers(width: i32, height: i32,
+                          bits_per_pixel: u16, compression: CompressionType)
+                          -> (BitmapFileHeader, BitmapInfoHeader) {
+        // NOTE(erick): We create the info header first because
+        // it computes the image_data_size and the info_header_size
+        let info_header = BitmapInfoHeader::new(width, height,
+                                               bits_per_pixel,
+                                               compression);
 
-        let p_offset = FILE_HEADER_SIZE + INFO_HEADER_SIZE;
-        let file_size = p_offset + image_data_size;
-
+        let p_offset = FILE_HEADER_SIZE + info_header.info_header_size;
+        let file_size = p_offset + info_header.image_size;
         let file_header = BitmapFileHeader::new(file_size, p_offset);
-        let info_header = BitmapInfoHeader::new(INFO_HEADER_SIZE,
-                                               width, height,
-                                               image_data_size,
-                                               32, // TODO: Support other formats
-                                               CompressionType::BitFields);
 
+        (file_header, info_header)
+
+    }
+
+    pub fn lazy_new(width: i32, height: i32,
+                    bits_per_pixel: u16, compression: CompressionType) -> Bitmap {
+        let (file_header, info_header) = Bitmap::create_headers(width, height,
+                                                               bits_per_pixel,
+                                                               compression);
         Bitmap {
             file_header : file_header,
             info_header : info_header,
@@ -582,13 +603,42 @@ impl Bitmap {
         }
     }
 
-    pub fn new(width: i32, height: i32) -> Bitmap {
+    pub fn new(width: i32, height: i32,
+               bits_per_pixel: u16, compression: CompressionType) -> Bitmap {
         let n_pixels = (width * height) as u32;
 
-        let mut result = Bitmap::lazy_new(width, height);
+        let mut result = Bitmap::lazy_new(width, height, bits_per_pixel, compression);
         result.image_data = vec![BitmapPixel::transparent(); n_pixels as usize];
 
         result
+    }
+
+    pub fn lazy_new_default(width: i32, height: i32) -> Bitmap {
+        Bitmap::lazy_new(width, height, 32, CompressionType::BitFields)
+    }
+
+    pub fn new_default(width: i32, height: i32) -> Bitmap {
+        Bitmap::new(width, height, 32, CompressionType::BitFields)
+    }
+
+    pub fn convert_to(&mut self, bits_per_pixel: u16, compression: CompressionType) {
+        if self.info_header.is_top_down {
+            self.mirror_vertically();
+        }
+        // TODO(erick): If the file doesn't have colors mask and
+        // need them, we have to create.
+        // TODO(erick): If the file doesn't have a palette and
+        // need one, we have to create it.
+
+        // NOTE(erick): It's easier to create new header than to
+        // try to modify the existing ones.
+        let (file_header, info_header) =
+            Bitmap::create_headers(self.info_header.image_width,
+                                  self.info_header.image_height,
+                                  bits_per_pixel, compression);
+
+        self.file_header = file_header;
+        self.info_header = info_header;
     }
 
     pub fn from_file(file: &mut File) -> BitmapResult<Bitmap> {
@@ -725,33 +775,6 @@ impl Bitmap {
         Ok(())
     }
 
-    pub fn convert_to_32_bitfield_compression(&mut self) {
-        let width  = self.info_header.image_width;
-        let height = self.info_header.image_height;
-
-        let n_pixels = (width * height) as u32;
-        let image_data_size = n_pixels * 4;
-
-        let p_offset = FILE_HEADER_SIZE + INFO_HEADER_SIZE;
-        let file_size = p_offset + image_data_size;
-
-        if self.info_header.is_top_down {
-            self.mirror_vertically();
-        }
-
-        // NOTE(erick): It's easier to create new header than to
-        // try to modify the existing ones.
-        let file_header = BitmapFileHeader::new(file_size, p_offset);
-        let info_header = BitmapInfoHeader::new(INFO_HEADER_SIZE,
-                                               width, height,
-                                               image_data_size,
-                                               32,
-                                               CompressionType::BitFields);
-
-        self.file_header = file_header;
-        self.info_header = info_header;
-    }
-
     pub fn color_to_alpha(&mut self, color: BitmapPixel) {
         for pixel in &mut self.image_data {
             if pixel.same_color_as(&color) {
@@ -806,7 +829,7 @@ impl Bitmap {
             }
 
 
-        let mut result = Bitmap::lazy_new(width as i32, height as i32);
+        let mut result = Bitmap::lazy_new_default(width as i32, height as i32);
         result.copy_rect_from(self, x0, y0, width, height);
 
         Ok(result)
@@ -818,7 +841,7 @@ impl Bitmap {
         let result_height = max(image0.info_header.image_height,
                                 image1.info_header.image_height);
 
-        let mut result = Bitmap::new(result_width, result_height);
+        let mut result = Bitmap::new_default(result_width, result_height);
         result.replace_rect_with_rect_from(image0,
                                            0, 0,
                                            0, 0,
@@ -839,7 +862,7 @@ impl Bitmap {
         let result_width = max(image0.info_header.image_width,
                                image1.info_header.image_width);
 
-        let mut result = Bitmap::new(result_width, result_height);
+        let mut result = Bitmap::new_default(result_width, result_height);
         result.replace_rect_with_rect_from(image0,
                                            0, 0,
                                            0, 0,
