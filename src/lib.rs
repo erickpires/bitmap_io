@@ -701,6 +701,40 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
                 }
             }
 
+        } else if bitmap_info.bits_per_pixel == 4 {
+            let mut pixel_iter = pixels.into_iter();
+            let image_palette = palette.as_ref().unwrap();
+
+            let bytes_per_row = (bitmap_info.image_width + 1) / 2;
+            let n_padding_bytes = pad_to_align!(bytes_per_row, 4);
+
+            for _ in 0 .. bitmap_info.image_height {
+                let mut pixels_written = 0;
+                for _ in 0 .. bitmap_info.image_width / 2 {
+                    let pixel0 = pixel_iter.next().unwrap();
+                    let pixel1 = pixel_iter.next().unwrap();
+
+                    let p0_index = pixel0.find_closest_by_index(image_palette) as u8;
+                    let p1_index = pixel1.find_closest_by_index(image_palette) as u8;
+
+                    let pixel_data = (p0_index << 4) | (p1_index & 0x0f);
+                    data.push(pixel_data);
+                    pixels_written += 2;
+                }
+
+                // NOTE(erick): We still have one pixel to write.
+                if pixels_written < bitmap_info.image_width {
+                    let pixel = pixel_iter.next().unwrap();
+                    let p_index = pixel.find_closest_by_index(image_palette) as u8;
+
+                    let pixel_data = p_index << 4;
+                    data.push(pixel_data);
+                }
+
+                for _ in 0 .. n_padding_bytes {
+                    data.push(0x00);
+                }
+            }
         } else {
             panic!("pixels_to_data: Unsupported bpp: {}",
                    bitmap_info.bits_per_pixel);
