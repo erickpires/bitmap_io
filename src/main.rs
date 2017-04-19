@@ -17,8 +17,10 @@ fn main() {
     let test_32_bitfield = Bitmap::from_file(&mut bmp_file).unwrap();
 
     let mut bmp_file = File::open("test_16-bitfield.bmp").unwrap();
-    let mut test_16_bitfield = Bitmap::from_file(&mut bmp_file).unwrap();
+    let test_16_bitfield = Bitmap::from_file(&mut bmp_file).unwrap();
 
+    let mut bmp_file = File::open("8bpp.bmp").unwrap();
+    let test_8_uncompressed = Bitmap::from_file(&mut bmp_file).unwrap();
 
     // let mut bmp_file = File::open("test.bmp").unwrap();
     // let bitmap = Bitmap::from_file(&mut bmp_file).unwrap();
@@ -41,6 +43,10 @@ fn main() {
 
     if let Ok(mut out_file) = File::create("test_16-bitfield-result.bmp") {
         test_16_bitfield.into_file(&mut out_file);
+    }
+
+    if let Ok(mut out_file) = File::create("test_8-uncompressed-result.bmp") {
+        test_8_uncompressed.into_file(&mut out_file);
     }
 
     println!("Hello world");

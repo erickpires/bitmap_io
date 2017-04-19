@@ -275,6 +275,8 @@ impl BitmapInfoHeader {
     }
 }
 
+type BitmapPalette = Vec<BitmapPixel>;
+
 #[derive(Clone, Debug)]
 pub struct BitmapPixel {
     pub blue  : u8,
@@ -341,6 +343,36 @@ impl BitmapPixel {
     }
     pub fn transparent() -> BitmapPixel {
         BitmapPixel::rgba(0xff, 0xff, 0xff, 0x00)
+    }
+
+    pub fn distance_squared(&self, other: &BitmapPixel) -> u32 {
+        let red_distance   = self.red as i32 - other.red as i32;
+        let green_distance = self.green as i32 - other.green as i32;
+        let blue_distance  = self.blue as i32 - other.blue as i32;
+
+        (red_distance   * red_distance +
+         green_distance * green_distance +
+         blue_distance  * blue_distance) as u32
+    }
+
+    pub fn find_closest_by_index(&self, palette: &BitmapPalette) -> usize {
+        let mut result_distance = self.distance_squared(&palette[0]);
+        let mut result = 0;
+
+        let palette_slice = &palette.as_slice()[1..];
+        let mut current_index = 1;
+        for pixel in palette_slice {
+            let current_distance = self.distance_squared(pixel);
+            if current_distance < result_distance {
+                result_distance = current_distance;
+                result = current_index;
+            }
+
+            current_index += 1;
+        }
+
+
+        result
     }
 }
 
@@ -533,7 +565,8 @@ macro_rules! pad_to_align {
 }
 
 fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
-                    bitmap_info: &BitmapInfoHeader) {
+                    bitmap_info: &BitmapInfoHeader,
+                    palette: &Option<BitmapPalette>) {
     // TODO(erick): Support 16-bit BitFields images.
     if bitmap_info.compression_type == CompressionType::BitFields as u32 {
         let red_mask = bitmap_info.red_mask;
@@ -620,6 +653,25 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
                     data.push(0x00);
                 }
             }
+        } else if bitmap_info.bits_per_pixel == 8 {
+            let mut pixel_iter = pixels.into_iter();
+            let image_palette = palette.as_ref().unwrap();
+
+            let n_padding_bytes = pad_to_align!(bitmap_info.image_width, 4);
+
+            for _ in 0 .. bitmap_info.image_height {
+                for _ in 0 .. bitmap_info.image_width {
+                    let pixel = pixel_iter.next().unwrap();
+
+                    let palette_index = pixel.find_closest_by_index(image_palette) as u8;
+                    data.push(palette_index);
+                }
+
+                for _ in 0 .. n_padding_bytes {
+                    data.push(0x00);
+                }
+            }
+
         } else {
             panic!("pixels_to_data: Unsupported bpp: {}",
                    bitmap_info.bits_per_pixel);
@@ -650,8 +702,6 @@ fn read_palette(data: &[u8]) -> BitmapPalette {
 
     result
 }
-
-pub type BitmapPalette = Vec<BitmapPixel>;
 
 pub  struct Bitmap {
     pub file_header : BitmapFileHeader,
@@ -741,15 +791,17 @@ impl Bitmap {
         // NOTE(erick): 'image_size' may be zero when the image is uncompressed
         // so we calculate the size in this case.
         if info_header.compression_type == CompressionType::Uncompressed as u32 {
-            // FIXME(erick): If bits_per_pixel is 4 this value is set to zero.
-            image_size_in_bytes = (info_header.bits_per_pixel / 8) as usize *
-                info_header.image_width as usize * info_header.image_height as usize;
+            let mut bits_per_row = info_header.image_width as usize
+                * info_header.bits_per_pixel as usize;
+            let bits_pad = pad_to_align!(bits_per_row as usize, 8);
+            bits_per_row += bits_pad;
 
-            if info_header.bits_per_pixel == 24 {
-                // NOTE(erick): We need to add the padding bytes.
-                let padding_per_row = pad_to_align!(3 * info_header.image_width, 4);
-                image_size_in_bytes += (info_header.image_height * padding_per_row) as usize;
-            }
+            // NOTE(erick): We need to add the padding bytes.
+            let mut bytes_per_row = bits_per_row / 8;
+            let bytes_pad = pad_to_align!(bytes_per_row, 4);
+            bytes_per_row += bytes_pad;
+
+            image_size_in_bytes = bytes_per_row * info_header.image_height as usize;
         }
 
         let mut image_palette = None;
@@ -789,14 +841,28 @@ impl Bitmap {
         self.file_header.into_data(&mut result);
         self.info_header.into_data(&mut result);
 
+        if self.info_header.bits_per_pixel == 1 ||
+            self.info_header.bits_per_pixel == 4 ||
+            self.info_header.bits_per_pixel == 8 {
+                let palette = self.palette.as_ref().expect("No palette found!");
+                for pixel in palette {
+                    result.push(pixel.blue);
+                    result.push(pixel.green);
+                    result.push(pixel.red);
+                    result.push(0x00);
+                }
+            }
+
         let data_size = result.len();
+        assert!(data_size <= self.file_header.pixel_array_offset as usize);
 
         // Padding the data
         for _ in data_size .. self.file_header.pixel_array_offset as usize {
             result.push(0x00);
         }
 
-        pixels_into_data(&self.image_data, &mut result, &self.info_header);
+        pixels_into_data(&self.image_data, &mut result,
+                         &self.info_header, &self.palette);
 
         result
     }
