@@ -139,6 +139,40 @@ pub fn read_24_uncompressed(data_walker: &mut BytesWalker,
     }
 }
 
+pub fn read_16_uncompressed(data_walker: &mut BytesWalker,
+                            result: &mut Vec<BitmapPixel>,
+                            image_width: i32) {
+    let mut column_index = 0;
+    while data_walker.has_data() {
+        if column_index == image_width {
+            // NOTE(erick): We have to align rows to
+            // 4 bytes values.
+            column_index = 0;
+            data_walker.align_with_u32();
+
+            // NOTE(erick): The file can have some padding at the end.
+            if !data_walker.has_data() {
+                break;
+            }
+        }
+
+        let pixel_data = data_walker.next_u16();
+        let mut pixel = BitmapPixel {
+            blue  : (pixel_data & 0x1f) as u8,
+            green : ((pixel_data >> 5)   & 0x1f) as u8,
+            red   : ((pixel_data  >> 10) & 0x1f) as u8,
+            alpha : 0xff,
+        };
+
+        map_zero_based(&mut pixel.red, 0x1f, 0xff);
+        map_zero_based(&mut pixel.green, 0x1f, 0xff);
+        map_zero_based(&mut pixel.blue, 0x1f, 0xff);
+
+        result.push(pixel);
+        column_index += 1;
+    }
+}
+
 pub fn read_8_uncompressed(data_walker: &mut BytesWalker,
                            result: &mut Vec<BitmapPixel>,
                            image_width: i32,

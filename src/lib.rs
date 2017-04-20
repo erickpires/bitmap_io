@@ -454,6 +454,10 @@ fn interpret_image_data(data: &[u8],
             bitmap_read::read_24_uncompressed(&mut data_walker, &mut result,
                                              info_header.image_width);
 
+        } else if bits_per_pixel == 16 {
+            bitmap_read::read_16_uncompressed(&mut data_walker, &mut result,
+                                             info_header.image_width);
+
         } else if bits_per_pixel == 8 {
             bitmap_read::read_8_uncompressed(&mut data_walker, &mut result,
                                             info_header.image_width,
