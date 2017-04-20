@@ -514,6 +514,10 @@ fn pixels_into_data(pixels: &Vec<BitmapPixel>, data: &mut Vec<u8>,
             bitmap_write::write_24_uncompressed(data, pixels,
                                                bitmap_info.image_width,
                                                bitmap_info.image_height);
+        } else if bitmap_info.bits_per_pixel == 16 {
+            bitmap_write::write_16_uncompressed(data, pixels,
+                                               bitmap_info.image_width,
+                                               bitmap_info.image_height);
 
         } else if bitmap_info.bits_per_pixel == 8 {
             bitmap_write::write_8_uncompressed(data, pixels,

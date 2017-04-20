@@ -96,11 +96,37 @@ pub fn write_24_uncompressed(data: &mut Vec<u8>, pixels: &Vec<BitmapPixel>,
     }
 }
 
+pub fn write_16_uncompressed(data: &mut Vec<u8>, pixels: &Vec<BitmapPixel>,
+                             image_width: i32, image_height: i32) {
+    let mut pixel_iter = pixels.into_iter();
+
+    let bytes_per_row = image_width * 2;
+    let n_padding_bytes = pad_to_align!(bytes_per_row, 4);
+
+    for _ in 0 .. image_height {
+        for _ in 0 .. image_width {
+            let mut pixel = pixel_iter.next().unwrap().clone();
+            map_zero_based(&mut pixel.red  , 0xff, 0x1f);
+            map_zero_based(&mut pixel.green, 0xff, 0x1f);
+            map_zero_based(&mut pixel.blue , 0xff, 0x1f);
+
+            let pixel_data = (pixel.red   as u16) <<  10 |
+                             (pixel.green as u16) <<   5 |
+                             (pixel.blue  as u16);
+
+            push_u16(data, pixel_data);
+        }
+
+        for _ in 0 .. n_padding_bytes {
+            data.push(0x00);
+        }
+    }
+}
+
 pub fn write_8_uncompressed(data: &mut Vec<u8>, pixels: &Vec<BitmapPixel>,
                              image_palette: &BitmapPalette,
                              image_width: i32, image_height: i32) {
     let mut pixel_iter = pixels.into_iter();
-
     let n_padding_bytes = pad_to_align!(image_width, 4);
 
     for _ in 0 .. image_height {
