@@ -601,13 +601,22 @@ impl Bitmap {
     pub fn create_headers(width: i32, height: i32,
                           bits_per_pixel: u16, compression: CompressionType)
                           -> (BitmapFileHeader, BitmapInfoHeader) {
+        let mut palette_size = 0;
+        if bits_per_pixel == 8 ||
+            bits_per_pixel == 4 ||
+            bits_per_pixel == 1 {
+                palette_size = 1 << bits_per_pixel;
+            }
+
+        palette_size *= 4; // NOTE: Each palette entry is 4 bytes long.
+
         // NOTE(erick): We create the info header first because
         // it computes the image_data_size and the info_header_size
         let info_header = BitmapInfoHeader::new(width, height,
                                                bits_per_pixel,
                                                compression);
 
-        let p_offset = FILE_HEADER_SIZE + info_header.info_header_size;
+        let p_offset = FILE_HEADER_SIZE + info_header.info_header_size + palette_size;
         let file_size = p_offset + info_header.image_size;
         let file_header = BitmapFileHeader::new(file_size, p_offset);
 
@@ -1052,4 +1061,88 @@ impl<'a> BytesWalker<'a> {
 
         self.current_index += pad;
     }
+}
+
+fn find_best_palette_median_cut(_colors: &Vec<BitmapPixel>,
+                                palette_desired_size: u16) -> BitmapPalette {
+    let mut colors = _colors.clone();
+
+    let mut colors_slice = colors.as_mut_slice();
+    let mut partitions = vec![(0, colors_slice.len())];
+
+    while partitions.len() < palette_desired_size as usize {
+        let mut new_partions = Vec::new();
+        for partition in partitions {
+            let partition_len = partition.1 - partition.0;
+            let partition_mid = partition.0 + (partition_len / 2);
+
+            let part = &mut colors_slice[partition.0 .. partition.1];
+            partition_divide(part);
+
+            let part0 = (partition.0, partition_mid);
+            let part1 = (partition_mid, partition.1);
+
+            new_partions.push(part0);
+            new_partions.push(part1);
+        }
+        partitions = new_partions;
+    }
+
+    let mut result = Vec::with_capacity(partitions.len());
+    for partition in partitions {
+        let part = &colors_slice[partition.0 .. partition.1];
+        result.push(pixels_mean(part));
+    }
+
+    result
+}
+
+fn partition_divide(partition: &mut [BitmapPixel]) {
+    let mut min_r = 0;
+    let mut min_g = 0;
+    let mut min_b = 0;
+
+    let mut max_r = 0xff;
+    let mut max_g = 0xff;
+    let mut max_b = 0xff;
+
+    for pixel in partition.as_ref() {
+        if pixel.red < min_r { min_r = pixel.red; }
+        if pixel.red > max_r { max_r = pixel.red; }
+
+        if pixel.green < min_g { min_g = pixel.green; }
+        if pixel.green > max_g { max_g = pixel.green; }
+
+        if pixel.blue < min_b { min_b = pixel.blue; }
+        if pixel.blue > max_b { max_b = pixel.blue; }
+    }
+
+    let diff_r = max_r - min_r;
+    let diff_g = max_g - min_g;
+    let diff_b = max_b - min_b;
+
+    if diff_r > diff_g && diff_r > diff_b {
+        partition.sort_by(|a: &BitmapPixel, b: &BitmapPixel| a.red.cmp(&b.red));
+    } else if diff_g > diff_b {
+        partition.sort_by(|a: &BitmapPixel, b: &BitmapPixel| a.green.cmp(&b.green));
+    } else {
+        partition.sort_by(|a: &BitmapPixel, b: &BitmapPixel| a.blue.cmp(&b.blue));
+    }
+}
+
+fn pixels_mean(pixels: &[BitmapPixel]) -> BitmapPixel {
+    let mut accum_r = 0.0;
+    let mut accum_g = 0.0;
+    let mut accum_b = 0.0;
+
+    let weight = 1.0 / pixels.len() as f64;
+    for pixel in pixels {
+        accum_r += pixel.red   as f64 * weight;
+        accum_g += pixel.green as f64 * weight;
+        accum_b += pixel.blue  as f64 * weight;
+    }
+
+    BitmapPixel::rgb(accum_r as u8,
+                    accum_g as u8,
+                    accum_b as u8)
 }
