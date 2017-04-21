@@ -1,3 +1,5 @@
+extern crate rand;
+
 #[macro_use]
 mod bitmap_read;
 mod bitmap_write;
@@ -385,6 +387,12 @@ impl BitmapPixel {
         BitmapPixel::rgba(0xff, 0xff, 0xff, 0x00)
     }
 
+    pub fn random() -> BitmapPixel {
+        BitmapPixel::rgb(rand::random::<u8>(),
+                        rand::random::<u8>(),
+                        rand::random::<u8>())
+    }
+
     pub fn distance_squared(&self, other: &BitmapPixel) -> u32 {
         let red_distance   = self.red as i32 - other.red as i32;
         let green_distance = self.green as i32 - other.green as i32;
@@ -664,7 +672,7 @@ impl Bitmap {
             bits_per_pixel == 1 {
                 let palette_size = 1 << bits_per_pixel;
                 self.palette = Some(
-                    find_best_palette_median_cut(&self.image_data, palette_size));
+                    find_best_palette_k_means(&self.image_data, palette_size));
             }
 
         // NOTE(erick): It's easier to create new header than to
@@ -1063,6 +1071,7 @@ impl<'a> BytesWalker<'a> {
     }
 }
 
+#[allow(dead_code)]
 fn find_best_palette_median_cut(_colors: &Vec<BitmapPixel>,
                                 palette_desired_size: u16) -> BitmapPalette {
     let mut colors = _colors.clone();
@@ -1097,6 +1106,7 @@ fn find_best_palette_median_cut(_colors: &Vec<BitmapPixel>,
     result
 }
 
+#[allow(dead_code)]
 fn partition_divide(partition: &mut [BitmapPixel]) {
     let mut min_r = 0;
     let mut min_g = 0;
@@ -1130,6 +1140,7 @@ fn partition_divide(partition: &mut [BitmapPixel]) {
     }
 }
 
+#[allow(dead_code)]
 fn pixels_mean(pixels: &[BitmapPixel]) -> BitmapPixel {
     let mut accum_r = 0.0;
     let mut accum_g = 0.0;
@@ -1145,4 +1156,60 @@ fn pixels_mean(pixels: &[BitmapPixel]) -> BitmapPixel {
     BitmapPixel::rgb(accum_r as u8,
                     accum_g as u8,
                     accum_b as u8)
+}
+
+
+struct KmeansPixel {
+    pixel      : BitmapPixel,
+    cluster_id : i32,
+}
+
+fn find_best_palette_k_means(_colors: &Vec<BitmapPixel>,
+                             palette_desired_size: u16) -> BitmapPalette {
+    let mut pixels : Vec<_> = _colors.into_iter().map(
+        |a| KmeansPixel{pixel: *a, cluster_id: -1}).collect();
+
+    let mut means = Vec::with_capacity(palette_desired_size as usize);
+    for _ in 0 .. palette_desired_size {
+        let rand_index = rand::random::<usize>() % _colors.len();
+        means.push(_colors[rand_index]);
+    }
+
+    for _ in 0 .. 20 {
+        // Assignment
+        let mut changes = 0;
+        for pixel in &mut pixels {
+            let p_index = pixel.pixel.find_closest_by_index(&means) as i32;
+            if p_index != pixel.cluster_id { changes += 1; }
+
+            pixel.cluster_id = p_index;
+        }
+
+        if changes == 0 { break; }
+
+        //Update
+        let mut means_counts : Vec<u64> = vec![0; palette_desired_size as usize];
+        let mut means_r : Vec<f64> = vec![0.0; palette_desired_size as usize];
+        let mut means_g : Vec<f64> = vec![0.0; palette_desired_size as usize];
+        let mut means_b : Vec<f64> = vec![0.0; palette_desired_size as usize];
+
+        for pixel in &pixels {
+            let index = pixel.cluster_id as usize;
+            let pix = pixel.pixel;
+
+            means_counts[index] += 1;
+            means_r[index] += pix.red   as f64;
+            means_g[index] += pix.green as f64;
+            means_b[index] += pix.blue  as f64;
+        }
+
+        for i in 0 .. means.len() {
+            let pixel = BitmapPixel::rgb((means_r[i] / (means_counts[i] as f64)) as u8,
+                                        (means_g[i] / (means_counts[i] as f64)) as u8,
+                                        (means_b[i] / (means_counts[i] as f64)) as u8);
+            means[i] = pixel;
+        }
+    }
+
+    means
 }
