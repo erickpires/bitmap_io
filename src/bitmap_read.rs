@@ -159,7 +159,7 @@ pub fn read_16_uncompressed(data_walker: &mut BytesWalker,
         let pixel_data = data_walker.next_u16();
         let mut pixel = BitmapPixel {
             blue  : (pixel_data & 0x1f) as u8,
-            green : ((pixel_data >> 5)   & 0x1f) as u8,
+            green : ((pixel_data  >>  5) & 0x1f) as u8,
             red   : ((pixel_data  >> 10) & 0x1f) as u8,
             alpha : 0xff,
         };

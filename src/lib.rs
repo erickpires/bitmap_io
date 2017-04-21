@@ -211,6 +211,26 @@ impl BitmapInfoHeader {
 
         let i_size = bytes_per_row * i_height as u32;
 
+        let mut red_mask    = 0x00000000;
+        let mut green_mask  = 0x00000000;
+        let mut blue_mask   = 0x00000000;
+        let mut alpha_mask  = 0x00000000;
+
+        if let CompressionType::BitFields = compression {
+            // NOTE(erick): Copying gimp here.
+            if bits_per_pixel == 32 {
+                red_mask   = 0xff000000;
+                green_mask = 0x00ff0000;
+                blue_mask  = 0x0000ff00;
+                alpha_mask = 0x000000ff;
+            } else {
+                red_mask   = 0x00007c00;
+                green_mask = 0x000003e0;
+                blue_mask  = 0x0000001f;
+                alpha_mask = 0x00008000;
+            }
+        }
+
         BitmapInfoHeader {
             info_header_size   : h_size,
             image_width        : i_width,
@@ -224,14 +244,12 @@ impl BitmapInfoHeader {
             colors_used        : 0,
             colors_important   : 0,
 
-            // NOTE(erick): Copying gimp here.
-            red_mask   : 0xff000000,
-            green_mask : 0x00ff0000,
-            blue_mask  : 0x0000ff00,
-            alpha_mask : 0x000000ff,
+            red_mask   : red_mask,
+            green_mask : green_mask,
+            blue_mask  : blue_mask,
+            alpha_mask : alpha_mask,
 
             is_top_down : false,
-
         }
     }
 
@@ -294,7 +312,6 @@ impl BitmapInfoHeader {
             push_u32(data, self.blue_mask);
             push_u32(data, self.alpha_mask);
         }
-
     }
 }
 
@@ -633,10 +650,13 @@ impl Bitmap {
         if self.info_header.is_top_down {
             self.mirror_vertically();
         }
-        // TODO(erick): If the file doesn't have colors mask and
-        // need them, we have to create.
-        // TODO(erick): If the file doesn't have a palette and
-        // need one, we have to create it.
+        if bits_per_pixel == 8 ||
+            bits_per_pixel == 4 ||
+            bits_per_pixel == 1 {
+                let palette_size = 1 << bits_per_pixel;
+                self.palette = Some(
+                    find_best_palette_median_cut(&self.image_data, palette_size));
+            }
 
         // NOTE(erick): It's easier to create new header than to
         // try to modify the existing ones.
